@@ -4,7 +4,34 @@ All notable changes to this package are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [0.1.0] - unreleased
+## [0.2.0] - unreleased
+
+### Changed
+
+- The package is now **`@vericto/sdk`** (it was `@vericto/vericto`, never
+  published). Entry points: `@vericto/sdk`, `@vericto/sdk/snowflake`,
+  `@vericto/sdk/better-sqlite3`, `@vericto/sdk/langchain`.
+
+### Added
+
+- `@vericto/sdk/langchain`, for LangChain.js 1.x (`@langchain/classic`):
+  - `VerictoSqlDatabase`, a `SqlDatabase` whose TypeORM data source checks every
+    `query()` (agent queries, `getTableInfo` sample rows, `SqlDatabaseChain`).
+    BLOCKED returns a message with the rule, reason and suggested fix for the
+    model (`onBlock: 'return'`, default) or throws `VerictoBlockedError`
+    (`onBlock: 'raise'`); masked queries run as the rewrite; Vericto
+    unavailable/config errors are thrown, never returned to the model. Dialect
+    from the TypeORM type, or `dialect`.
+  - `VerictoQuerySqlTool` and `VerictoSqlToolkit` (for `createSqlAgent`), which
+    let Vericto errors through instead of turning them into text.
+  - `VerictoCheckSqlTool`, a check-only tool that returns the verdict.
+  - `guardDataSource`, `dialectFromDataSource`, `blockedMessage`,
+    `describeVerdict` helpers.
+- Optional peer dependencies `@langchain/classic`, `@langchain/core`, `typeorm`.
+  Tested with `@langchain/classic` 1.0.52, `@langchain/core` 1.2.17,
+  `typeorm` 1.1.2.
+
+## [0.1.0] - unreleased (never published)
 
 First release: Vericto checks in front of Node.js database drivers, evaluated by
 the Vericto Runtime API (`POST /api/v1/proxy/query`).
@@ -36,4 +63,5 @@ the Vericto Runtime API (`POST /api/v1/proxy/query`).
   `guardDatabase()` rejects with `VerictoUnsupportedDialectError` until the server
   lists it.
 
+[0.2.0]: https://github.com/vericto/vericto-node/releases/tag/v0.2.0
 [0.1.0]: https://github.com/vericto/vericto-node/releases/tag/v0.1.0

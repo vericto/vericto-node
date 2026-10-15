@@ -4,6 +4,7 @@
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import assert from 'node:assert/strict';
+import { readdirSync, readFileSync } from 'node:fs';
 
 const require = createRequire(import.meta.url);
 
@@ -49,6 +50,15 @@ async function run(core, snowflake, label) {
   await conn.query('SELECT 1');
   await assert.rejects(conn.query('DELETE FROM t'), (err) => err instanceof core.VerictoBlockedError);
   console.log(`${label}: ok (${core.VERSION})`);
+}
+
+// The LangChain entry is opt-in: nothing but dist/langchain.* may load its peers, so
+// the root and driver entries work without @langchain/* or typeorm installed (this
+// job runs with no node_modules at all).
+for (const file of readdirSync(new URL('../dist/', import.meta.url))) {
+  if (!/\.(c?js)$/.test(file) || file.startsWith('langchain.')) continue;
+  const code = readFileSync(new URL(`../dist/${file}`, import.meta.url), 'utf8');
+  assert.ok(!/@langchain\/|typeorm/.test(code), `${file} references an optional LangChain peer`);
 }
 
 try {
