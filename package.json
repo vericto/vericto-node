@@ -1,0 +1,69 @@
+{
+  "name": "@vericto/vericto",
+  "version": "0.1.0",
+  "description": "Check every SQL statement with Vericto before it runs: thin wrappers for snowflake-sdk and better-sqlite3, and a client for the Vericto Runtime API.",
+  "license": "Elastic-2.0",
+  "author": "Vericto <security@vericto.com>",
+  "homepage": "https://vericto.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vericto/vericto-node.git"
+  },
+  "bugs": "https://github.com/vericto/vericto-node/issues",
+  "keywords": ["sql", "firewall", "security", "snowflake", "sqlite", "better-sqlite3", "ai-agents", "vericto"],
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+      "require": { "types": "./dist/index.d.cts", "default": "./dist/index.cjs" }
+    },
+    "./better-sqlite3": {
+      "import": { "types": "./dist/better-sqlite3.d.ts", "default": "./dist/better-sqlite3.js" },
+      "require": { "types": "./dist/better-sqlite3.d.cts", "default": "./dist/better-sqlite3.cjs" }
+    },
+    "./snowflake": {
+      "import": { "types": "./dist/snowflake.d.ts", "default": "./dist/snowflake.js" },
+      "require": { "types": "./dist/snowflake.d.cts", "default": "./dist/snowflake.cjs" }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "README.md", "CHANGELOG.md", "SECURITY.md", "LICENSE"],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "smoke": "node scripts/smoke.mjs",
+    "prepack": "tsup --silent"
+  },
+  "peerDependencies": {
+    "better-sqlite3": ">=9",
+    "snowflake-sdk": ">=1.9"
+  },
+  "peerDependenciesMeta": {
+    "better-sqlite3": { "optional": true },
+    "snowflake-sdk": { "optional": true }
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/better-sqlite3": "7.6.13",
+    "@types/node": "22.20.5",
+    "better-sqlite3": "13.0.3",
+    "eslint": "10.12.0",
+    "tsup": "9.0.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.71.2",
+    "vitest": "5.0.4"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}
