@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { VerictoBlockedError, VerictoUnsupportedDialectError } from '../src/index.js';
 import { guardDatabase, type GuardedDatabase } from '../src/better-sqlite3.js';
-import { FakeVericto, TODAY_DIALECTS, blocked, masked } from './fake-vericto.js';
+import { FakeVericto, DIALECTS_WITHOUT_SQLITE, blocked, masked } from './fake-vericto.js';
 
 let fake: FakeVericto;
 let raw: Database.Database;
@@ -70,8 +70,8 @@ describe('better-sqlite3', () => {
     expect(statement.get([])).toEqual({ one: 1 });
   });
 
-  it('refuses to guard while the server lacks the sqlite dialect', async () => {
-    fake.dialects = [...TODAY_DIALECTS];
+  it('refuses to guard when the server does not list the sqlite dialect', async () => {
+    fake.dialects = [...DIALECTS_WITHOUT_SQLITE];
     const other = new Database(':memory:');
     try {
       await expect(guardDatabase(other, { vericto: fake.guard() })).rejects.toBeInstanceOf(

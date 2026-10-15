@@ -233,12 +233,17 @@ version today). Enable it only for hot, repetitive statements, with a short TTL.
 ## SQLite status
 
 SQLite has no server, so there is no Vericto proxy for it: this wrapper is the
-enforcement point. The wrapper is ready, but the **Vericto engine does not
-evaluate the `sqlite` dialect yet** (the server lists `postgres`, `mysql`,
-`oracle`, `mssql`, `snowflake`). `guardDatabase()` asks the server
-(`GET /api/v1/meta/config`) and rejects with `VerictoUnsupportedDialectError`,
-before any SQL runs, while it is not listed. It starts working, unchanged, when
-the server adds it. There is deliberately no fallback to another dialect.
+enforcement point. The **Vericto server evaluates the `sqlite` dialect**
+(vericto-engine 4.1.0+; `GET /api/v1/meta/config` lists `postgres`, `mysql`,
+`oracle`, `mssql`, `snowflake`, `sqlite`), including SQLite-specific rules such
+as `ATTACH DATABASE` (VERICTO-098), `PRAGMA foreign_keys = OFF` (VERICTO-099),
+`load_extension()` (VERICTO-100) and `VACUUM INTO` (VERICTO-101).
+
+`guardDatabase()` still asks the server first and rejects with
+`VerictoUnsupportedDialectError`, before any SQL runs, if it does not list
+`sqlite` (for example an older self-hosted server). There is deliberately no
+fallback to another dialect. See [Live tests](#live-tests) for an end-to-end
+check against a real server.
 
 ## Enforcement boundary
 
@@ -290,6 +295,50 @@ npm run smoke       # the built package, ESM and CJS, on any Node >= 18
 Development needs Node 22+ (the tooling); the published package runs on Node 18+.
 Nothing in the test suite connects to Snowflake.
 
+### Live tests
+
+`test/live/sqlite.live.test.ts` is an opt-in end-to-end test of
+`@vericto/sdk/better-sqlite3` against a **real Vericto Runtime API** and a real
+SQLite file in a temporary directory. It is skipped unless the variables below
+are set, and never runs in CI. Benign statements (`CREATE TABLE`, `INSERT` with
+`?` binds, UPSERT `ON CONFLICT ... DO UPDATE`, `SELECT`, `DELETE ... WHERE`) must
+run; `DELETE` without `WHERE` (VERICTO-001), `ATTACH DATABASE` (VERICTO-098),
+`load_extension()` (VERICTO-100) and `VACUUM INTO` (VERICTO-101) must reject with
+`VerictoBlockedError` before SQLite sees them (checked with better-sqlite3's
+`verbose` trace, the file's SHA-256 and the absence of the attached/copy files);
+`PRAGMA foreign_keys = OFF` (VERICTO-099) must run and log a FLAGGED warning; an
+`exec` script with a blocked statement in the middle must run none of it. The
+database's workspace must use the default rules; a run makes about 25
+evaluations, counted against the workspace's monthly quota.
+
+| Variable | Value |
+|---|---|
+| `VERICTO_LIVE_SQLITE` | `1` |
+| `VERICTO_API_KEY` | a `vtro_...` key with the `proxy:evaluate` scope |
+| `VERICTO_API_URL` | `https://api-staging.vericto.com` (or another server that lists `sqlite`) |
+| `VERICTO_DATABASE_ID` | the id of a database of dialect `sqlite` in that workspace |
+
+On the host (Node 22+):
+
+```bash
+export VERICTO_LIVE_SQLITE=1 VERICTO_API_URL=https://api-staging.vericto.com
+export VERICTO_API_KEY=vtro_... VERICTO_DATABASE_ID=...
+npm ci && npx vitest run test/live
+```
+
+Or in a throwaway `node:22-slim` container (the repository is mounted read-only
+and copied; better-sqlite3 installs its prebuilt linux binary; the SQLite file
+never leaves the container):
+
+```bash
+docker run --rm -v "$PWD":/src:ro \
+  -e VERICTO_LIVE_SQLITE=1 -e VERICTO_API_KEY -e VERICTO_API_URL -e VERICTO_DATABASE_ID \
+  node:22-slim sh -c 'mkdir /work && cd /src && tar --exclude=node_modules --exclude=dist -cf - . | tar -xf - -C /work \
+    && cd /work && npm ci --no-audit --no-fund && npx vitest run test/live'
+```
+
+A skipped run (`7 skipped`) means a variable is missing.
+
 ## Security
 
 See [SECURITY.md](SECURITY.md). Report vulnerabilities to security@vericto.com,
@@ -323,6 +372,7 @@ Configuración: `VERICTO_API_KEY` (clave `vtro_...` con el scope `proxy:evaluate
 `VERICTO_DATABASE_ID` y, opcionalmente, `VERICTO_API_URL`, `VERICTO_FAIL_MODE`,
 `VERICTO_TIMEOUT`. Los valores de los parámetros nunca se envían a Vericto.
 
-SQLite: el wrapper está listo, pero el motor de Vericto todavía no evalúa el
-dialecto `sqlite`; hasta que el servidor lo anuncie, `guardDatabase()` rechaza con
-`VerictoUnsupportedDialectError` sin ejecutar nada.
+SQLite: el servidor de Vericto evalúa el dialecto `sqlite` (vericto-engine
+4.1.0+). `guardDatabase()` igual consulta `GET /api/v1/meta/config` y, si un
+servidor no lo anuncia, rechaza con `VerictoUnsupportedDialectError` sin ejecutar
+nada.
