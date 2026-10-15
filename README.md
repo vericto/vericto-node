@@ -1,4 +1,4 @@
-# @vericto/vericto (Node.js)
+# @vericto/sdk (Node.js)
 
 > Check every SQL statement with [Vericto](https://vericto.com) **before** it runs:
 > thin wrappers for `snowflake-sdk` and `better-sqlite3`, and a client for the
@@ -17,12 +17,12 @@ release (see [Evaluators](#evaluators)).
 
 - TypeScript types, ESM and CommonJS builds, Node.js 18+ (uses the global `fetch`).
 - No runtime dependencies. Drivers are optional peer dependencies and separate
-  entry points: importing `@vericto/vericto` never loads a driver.
+  entry points: importing `@vericto/sdk` never loads a driver.
 
 ## Install
 
 ```bash
-npm install @vericto/vericto
+npm install @vericto/sdk
 ```
 
 ## Configure
@@ -48,8 +48,8 @@ accepted for localhost alone), and never appears in messages, `toString()` or
 
 ```ts
 import snowflake from 'snowflake-sdk';
-import { VerictoBlockedError } from '@vericto/vericto';
-import { guardConnection } from '@vericto/vericto/snowflake';
+import { VerictoBlockedError } from '@vericto/sdk';
+import { guardConnection } from '@vericto/sdk/snowflake';
 
 const raw = snowflake.createConnection({ account, username, authenticator: 'SNOWFLAKE_JWT', privateKeyPath });
 await raw.connectAsync();
@@ -77,7 +77,7 @@ means nothing runs.
 
 ```ts
 import Database from 'better-sqlite3';
-import { guardDatabase } from '@vericto/vericto/better-sqlite3';
+import { guardDatabase } from '@vericto/sdk/better-sqlite3';
 
 const db = await guardDatabase(new Database('app.db'));
 
@@ -98,7 +98,7 @@ statements before `db.raw.transaction(...)` and use them inside it. See
 ### Any driver, by hand
 
 ```ts
-import { Vericto, sqlToExecute } from '@vericto/vericto';
+import { Vericto, sqlToExecute } from '@vericto/sdk';
 
 const vericto = new Vericto();                        // one per process
 const verdict = await vericto.enforce(sql, 'postgres'); // rejects with VerictoBlockedError
@@ -232,7 +232,7 @@ not in public issues.
 
 ## En español
 
-`@vericto/vericto` valida cada sentencia SQL con Vericto **antes** de ejecutarla:
+`@vericto/sdk` valida cada sentencia SQL con Vericto **antes** de ejecutarla:
 wrappers para `snowflake-sdk` y `better-sqlite3`, y un cliente de la Runtime API
 para cualquier otro driver.
 

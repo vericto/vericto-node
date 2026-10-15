@@ -7,7 +7,7 @@
  *   Runtime API.
  *
  * Driver wrappers are separate entry points so that importing this module never
- * loads a driver: `@vericto/vericto/snowflake` and `@vericto/vericto/better-sqlite3`.
+ * loads a driver: `@vericto/sdk/snowflake` and `@vericto/sdk/better-sqlite3`.
  */
 export { KNOWN_DIALECTS, normalizeDialect } from './dialects.js';
 export {

@@ -1,5 +1,5 @@
 {
-  "name": "@vericto/vericto",
+  "name": "@vericto/sdk",
   "version": "0.1.0",
   "description": "Check every SQL statement with Vericto before it runs: thin wrappers for snowflake-sdk and better-sqlite3, and a client for the Vericto Runtime API.",
   "license": "Elastic-2.0",
