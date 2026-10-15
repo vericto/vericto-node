@@ -18,7 +18,7 @@ Include:
 
 - A description of the vulnerability and its impact.
 - Steps to reproduce.
-- The affected version (`npm ls @vericto/vericto`)
+- The affected version (`npm ls @vericto/sdk`)
   and the driver involved.
 - Any suggested remediation.
 

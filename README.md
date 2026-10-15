@@ -1,8 +1,11 @@
-# @vericto/vericto (Node.js)
+Official Vericto SDK for Node.js: check SQL before it runs (snowflake-sdk, better-sqlite3, LangChain.js SQL agents and chains, and any driver through the Runtime API client).
+
+# @vericto/sdk
 
 > Check every SQL statement with [Vericto](https://vericto.com) **before** it runs:
-> thin wrappers for `snowflake-sdk` and `better-sqlite3`, and a client for the
-> Vericto Runtime API you can put in front of any driver.
+> thin wrappers for `snowflake-sdk` and `better-sqlite3`, a LangChain.js
+> integration for SQL agents, and a client for the Vericto Runtime API you can put
+> in front of any driver.
 
 Vericto is a deterministic SQL firewall: it parses each statement into an AST and
 evaluates it against your workspace's rules (destructive statements, missing
@@ -16,13 +19,25 @@ Evaluation happens in your Vericto workspace; nothing is evaluated locally in th
 release (see [Evaluators](#evaluators)).
 
 - TypeScript types, ESM and CommonJS builds, Node.js 18+ (uses the global `fetch`).
-- No runtime dependencies. Drivers are optional peer dependencies and separate
-  entry points: importing `@vericto/vericto` never loads a driver.
+- No runtime dependencies. Drivers and LangChain are optional peer dependencies
+  and separate entry points: importing `@vericto/sdk` never loads them.
+
+## Integrations
+
+| Integration | Entry point | Peer dependencies | Status |
+|---|---|---|---|
+| snowflake-sdk | `@vericto/sdk/snowflake` | `snowflake-sdk` >= 1.9 | 0.1.0 |
+| better-sqlite3 | `@vericto/sdk/better-sqlite3` | `better-sqlite3` >= 9 | 0.1.0 (see [SQLite status](#sqlite-status)) |
+| LangChain.js SQL agents, tools and chains | `@vericto/sdk/langchain` | `@langchain/classic` 1.x, `@langchain/core` 1.x, `typeorm` | 0.2.0 |
+| Any other driver | `@vericto/sdk` (`Vericto.enforce` / `prepare`) | none | 0.1.0 |
+
+Python (snowflake-connector-python, sqlite3, SQLAlchemy, LangChain, LlamaIndex,
+dbt and Airflow) lives in [vericto-python](https://github.com/vericto/vericto-python).
 
 ## Install
 
 ```bash
-npm install @vericto/vericto
+npm install @vericto/sdk
 ```
 
 ## Configure
@@ -48,8 +63,8 @@ accepted for localhost alone), and never appears in messages, `toString()` or
 
 ```ts
 import snowflake from 'snowflake-sdk';
-import { VerictoBlockedError } from '@vericto/vericto';
-import { guardConnection } from '@vericto/vericto/snowflake';
+import { VerictoBlockedError } from '@vericto/sdk';
+import { guardConnection } from '@vericto/sdk/snowflake';
 
 const raw = snowflake.createConnection({ account, username, authenticator: 'SNOWFLAKE_JWT', privateKeyPath });
 await raw.connectAsync();
@@ -77,7 +92,7 @@ means nothing runs.
 
 ```ts
 import Database from 'better-sqlite3';
-import { guardDatabase } from '@vericto/vericto/better-sqlite3';
+import { guardDatabase } from '@vericto/sdk/better-sqlite3';
 
 const db = await guardDatabase(new Database('app.db'));
 
@@ -95,10 +110,66 @@ SQL cannot change, so its `run`/`all`/`get`/`iterate` stay synchronous: prepare
 statements before `db.raw.transaction(...)` and use them inside it. See
 [SQLite status](#sqlite-status).
 
+### LangChain.js (SQL agents, tools and chains)
+
+```bash
+npm install @vericto/sdk @langchain/classic @langchain/core typeorm
+```
+
+```ts
+import { DataSource } from 'typeorm';
+import { createSqlAgent } from '@langchain/classic/agents/toolkits/sql';
+import { VerictoSqlDatabase, VerictoSqlToolkit, VerictoCheckSqlTool } from '@vericto/sdk/langchain';
+
+const db = await VerictoSqlDatabase.fromDataSourceParams({
+  appDataSource: new DataSource({ type: 'postgres', url: process.env.DATABASE_URL }),
+  // vericto: new Vericto({ ... }), dialect: 'postgres', onBlock: 'return' | 'raise'
+});
+
+const agent = createSqlAgent(llm, new VerictoSqlToolkit(db, llm));
+await agent.invoke({ input: 'How many orders shipped last week?' });
+
+// Or give an agent a check-only tool (nothing is executed):
+const check = new VerictoCheckSqlTool({ db });
+```
+
+`VerictoSqlDatabase` is a LangChain `SqlDatabase` (`@langchain/classic/sql_db`;
+`langchain/sql_db` no longer exists in LangChain.js 1.x), so it is accepted
+wherever one is: `QuerySqlTool`, `SqlToolkit`/`createSqlAgent`,
+`SqlDatabaseChain`. Its TypeORM data source is wrapped so that every `query()` is
+checked: the agent's queries, the sample rows `getTableInfo` puts in the prompt,
+and the SQL `SqlDatabaseChain` generates.
+
+| Verdict | What the agent sees |
+|---|---|
+| `BLOCKED` | `onBlock: 'return'` (default): the tool returns a message with the rule, severity, reason and suggested fix, and the query does not run, so the model can correct itself. `onBlock: 'raise'`: `VerictoBlockedError`. |
+| `FLAGGED` / `MONITORED` | The query runs; the verdict is logged and passed to `onVerdict`. |
+| mask | The masked rewrite runs, never the original: the model only sees masked values (sample rows included). |
+| no verdict, config error | Thrown (`VerictoUnavailableError`, `VerictoConfigError`), never returned to the model; the [fail mode](#fail-mode) applies. |
+
+- The dialect comes from the TypeORM type (`postgres`/`aurora-postgres`,
+  `mysql`/`mariadb`/`aurora-mysql`, `mssql`, `oracle`, `sqlite`/`better-sqlite3`/
+  `sqljs`); other types need `dialect`. The factory fails fast when the server does
+  not evaluate it.
+- `VerictoSqlToolkit` is `SqlToolkit` with `VerictoQuerySqlTool`: the stock
+  `QuerySqlTool` turns every error into text for the model, which would also
+  hand it "Vericto unavailable" (and the block under `onBlock: 'raise'`).
+  `VerictoQuerySqlTool` rethrows Vericto errors and still returns SQL errors as text.
+- A blocked sample-rows query is left out of the table info (LangChain logs the
+  error and carries on).
+- `SqlDatabaseChain` swallows query errors itself (it logs them and answers from
+  an empty result), so there a block shows up as "no result" rather than as the
+  message.
+- LangChain's schema introspection in `fromDataSourceParams` (its catalogue read
+  of tables and columns) runs on the raw data source. `db.rawDataSource` is the
+  unguarded data source: SQL run through it is not checked.
+- `VerictoCheckSqlTool` is a Runtime API evaluation like any other: it counts
+  against the runtime quota and is in the audit trail.
+
 ### Any driver, by hand
 
 ```ts
-import { Vericto, sqlToExecute } from '@vericto/vericto';
+import { Vericto, sqlToExecute } from '@vericto/sdk';
 
 const vericto = new Vericto();                        // one per process
 const verdict = await vericto.enforce(sql, 'postgres'); // rejects with VerictoBlockedError
@@ -197,10 +268,9 @@ be added later behind the same interface without changing the wrappers.
 
 ## Integrations roadmap
 
-Not implemented in 0.1.0; each is meant to be a thin layer over `Vericto.enforce`:
+Not implemented yet; each is meant to be a thin layer over `Vericto.enforce`:
 
-- **LangChain.js / LlamaIndex.TS SQL tools**: check the generated SQL and return
-  `suggestedFix` to the agent instead of throwing.
+- **LlamaIndex.TS** SQL tools.
 - **`pg` and `mysql2`**: `pool.query` wrappers (the TCP proxy already covers
   PostgreSQL and MySQL without code changes).
 - **Cloudflare D1** Workers binding helper.
@@ -211,7 +281,8 @@ Not implemented in 0.1.0; each is meant to be a thin layer over `Vericto.enforce
 ```bash
 npm ci
 npm run lint && npm run typecheck
-npm test            # vitest: local Runtime API stand-in, real better-sqlite3, fake snowflake-sdk
+npm test            # vitest: local Runtime API stand-in, real better-sqlite3, fake snowflake-sdk,
+                    # real LangChain.js + TypeORM with a scripted LLM (no model calls)
 npm run build       # tsup → dist/ (ESM + CJS + .d.ts)
 npm run smoke       # the built package, ESM and CJS, on any Node >= 18
 ```
@@ -232,9 +303,13 @@ not in public issues.
 
 ## En español
 
-`@vericto/vericto` valida cada sentencia SQL con Vericto **antes** de ejecutarla:
-wrappers para `snowflake-sdk` y `better-sqlite3`, y un cliente de la Runtime API
-para cualquier otro driver.
+`@vericto/sdk` (antes `@vericto/vericto`, nunca publicado) valida cada sentencia
+SQL con Vericto **antes** de ejecutarla: wrappers para `snowflake-sdk` y
+`better-sqlite3`, una integración con LangChain.js (`@vericto/sdk/langchain`) y un
+cliente de la Runtime API para cualquier otro driver. En LangChain.js, una consulta
+bloqueada devuelve al agente un mensaje con la regla y la corrección sugerida (o
+lanza `VerictoBlockedError` con `onBlock: 'raise'`), y las consultas con columnas
+enmascaradas se ejecutan reescritas.
 
 - **BLOCKED**: rechaza con `VerictoBlockedError` (hallazgos y corrección sugerida) y
   la sentencia no llega a la base de datos.

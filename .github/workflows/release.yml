@@ -1,9 +1,9 @@
-# Publish to npm when a version tag (v0.1.0, ...) is pushed. Prepared, not yet run.
+# Publish to npm when a version tag (v0.2.0, ...) is pushed. Prepared, not yet run.
 #
 # npm trusted publishing (OIDC) with provenance: no npm token is stored. Before the
 # first tag:
 #   1. Create the `npm` environment in the repository settings (required reviewer).
-#   2. On npmjs.com, package @vericto/vericto → Settings → Trusted publishing → GitHub
+#   2. On npmjs.com, package @vericto/sdk → Settings → Trusted publishing → GitHub
 #      Actions: organization `vericto`, repository `vericto-node`, workflow
 #      `release.yml`, environment `npm`.
 #      If npm requires the package to exist before a trusted publisher can be added,
@@ -29,7 +29,7 @@ jobs:
     timeout-minutes: 15
     environment:
       name: npm
-      url: https://www.npmjs.com/package/@vericto/vericto
+      url: https://www.npmjs.com/package/@vericto/sdk
     permissions:
       contents: read
       id-token: write   # OIDC for trusted publishing and the provenance statement

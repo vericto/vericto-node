@@ -1,7 +1,7 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: ['src/index.ts', 'src/better-sqlite3.ts', 'src/snowflake.ts'],
+  entry: ['src/index.ts', 'src/better-sqlite3.ts', 'src/snowflake.ts', 'src/langchain.ts'],
   format: ['esm', 'cjs'],
   dts: true,
   target: 'node18',

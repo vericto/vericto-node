@@ -2,8 +2,8 @@
 // the `sqlite` dialect; until then guardDatabase rejects and no SQL runs.
 import Database from 'better-sqlite3';
 
-import { VerictoBlockedError, VerictoUnsupportedDialectError } from '@vericto/vericto';
-import { guardDatabase } from '@vericto/vericto/better-sqlite3';
+import { VerictoBlockedError, VerictoUnsupportedDialectError } from '@vericto/sdk';
+import { guardDatabase } from '@vericto/sdk/better-sqlite3';
 
 const raw = new Database('app.db');
 try {

@@ -2,8 +2,8 @@
 //   VERICTO_API_KEY=vtro_... VERICTO_DATABASE_ID=<uuid> node --experimental-strip-types examples/snowflake.ts
 import snowflake from 'snowflake-sdk';
 
-import { VerictoBlockedError } from '@vericto/vericto';
-import { guardConnection } from '@vericto/vericto/snowflake';
+import { VerictoBlockedError } from '@vericto/sdk';
+import { guardConnection } from '@vericto/sdk/snowflake';
 
 const raw = snowflake.createConnection({
   account: process.env.SNOWFLAKE_ACCOUNT ?? '',

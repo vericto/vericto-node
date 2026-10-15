@@ -1,6 +1,6 @@
 // Ask Vericto yourself, around any driver: run the SQL it returns (the masked
 // rewrite when a sensitive column is read), or handle the block.
-import { Vericto, sqlToExecute } from '@vericto/vericto';
+import { Vericto, sqlToExecute } from '@vericto/sdk';
 
 const vericto = new Vericto({ failMode: 'closed', onVerdict: (v) => console.log(v.decision, v.ruleCode ?? '') });
 
