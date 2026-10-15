@@ -1,0 +1,100 @@
+# Lint, type-check, test, build and smoke-test on every PR into main and every push
+# to main.
+#
+# Runners: while the repository is private, jobs run on Vericto's self-hosted spot
+# runners (as vericto-fmw does). When it goes public, set the repository variable
+# CI_RUNS_ON to "ubuntu-latest" (JSON string, quotes included) to move to the free
+# GitHub-hosted runners; no workflow edit is needed.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Lint, type-check and test (Node ${{ matrix.node }})
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["self-hosted","linux","x64","vericto-spot"]') }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # The dev tooling (vitest, eslint, better-sqlite3 13) needs Node 22+.
+        node: ["22", "24"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: matrix.node == '24'
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 3
+
+  smoke:
+    name: Built package on Node ${{ matrix.node }}
+    needs: check
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["self-hosted","linux","x64","vericto-spot"]') }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # The runtime promise is Node 18+: the built ESM and CJS, no dev dependencies.
+        node: ["18", "20", "22", "24"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - run: node scripts/smoke.mjs
+
+  pack:
+    name: Package contents
+    needs: check
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["self-hosted","linux","x64","vericto-spot"]') }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - name: Only dist and the docs are published
+        run: |
+          npm pack --dry-run --json > "$RUNNER_TEMP/pack.json"
+          node -e '
+            const files = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))[0].files.map((f) => f.path);
+            const bad = files.filter((p) => !/^(dist\/|README\.md$|CHANGELOG\.md$|SECURITY\.md$|LICENSE$|package\.json$)/.test(p));
+            console.log(files.join("\n"));
+            if (bad.length) { console.error("unexpected files:", bad); process.exit(1); }
+          ' "$RUNNER_TEMP/pack.json"
