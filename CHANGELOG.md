@@ -14,6 +14,14 @@ All notable changes to this package are documented here. The format follows
   published). Entry points: `@vericto/sdk`, `@vericto/sdk/snowflake`,
   `@vericto/sdk/better-sqlite3`, `@vericto/sdk/langchain`.
 
+- Documentation: the Vericto server now evaluates the `sqlite` dialect
+  (vericto-engine 4.1.0; `GET /api/v1/meta/config` lists it), so
+  `@vericto/sdk/better-sqlite3` and `@vericto/sdk/langchain` on SQLite work
+  against it. The 0.1.0 known limitation no longer applies to such servers.
+  Unchanged behaviour: `guardDatabase()` still asks `/meta/config` and rejects
+  with `VerictoUnsupportedDialectError`, before any SQL runs, against a server
+  that does not list `sqlite`.
+
 ### Added
 
 - `@vericto/sdk/langchain`, for LangChain.js 1.x (`@langchain/classic`):
@@ -32,18 +40,6 @@ All notable changes to this package are documented here. The format follows
 - Optional peer dependencies `@langchain/classic`, `@langchain/core`, `typeorm`.
   Tested with `@langchain/classic` 1.0.52, `@langchain/core` 1.2.17,
   `typeorm` 1.1.2.
-
-### Changed
-
-- Documentation: the Vericto server now evaluates the `sqlite` dialect
-  (vericto-engine 4.1.0; `GET /api/v1/meta/config` lists it), so
-  `@vericto/sdk/better-sqlite3` and `@vericto/sdk/langchain` on SQLite work
-  against it. The 0.1.0 known limitation no longer applies to such servers.
-  Unchanged behaviour: `guardDatabase()` still asks `/meta/config` and rejects
-  with `VerictoUnsupportedDialectError`, before any SQL runs, against a server
-  that does not list `sqlite`.
-
-### Added
 
 - `test/live/sqlite.live.test.ts`: an opt-in end-to-end test of
   `@vericto/sdk/better-sqlite3` against a real Runtime API (allowed statements,
