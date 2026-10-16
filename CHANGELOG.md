@@ -6,6 +6,14 @@ All notable changes to this package are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-17
+
+### Changed
+
+- Releases are published only through npm trusted publishing (OIDC) with
+  provenance. The release workflow no longer reads an npm token; 0.2.0 was the
+  one-time bootstrap publish. No code changes.
+
 ## [0.2.0] - 2026-10-16
 
 ### Changed
@@ -79,5 +87,6 @@ the Vericto Runtime API (`POST /api/v1/proxy/query`).
   `guardDatabase()` rejects with `VerictoUnsupportedDialectError` until the server
   lists it.
 
+[0.2.1]: https://github.com/vericto/vericto-node/releases/tag/v0.2.1
 [0.2.0]: https://github.com/vericto/vericto-node/releases/tag/v0.2.0
 [0.1.0]: https://github.com/vericto/vericto-node/releases/tag/v0.1.0
