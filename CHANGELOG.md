@@ -4,6 +4,26 @@ All notable changes to this package are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- Documentation: the Vericto server now evaluates the `sqlite` dialect
+  (vericto-engine 4.1.0; `GET /api/v1/meta/config` lists it), so
+  `@vericto/sdk/better-sqlite3` and `@vericto/sdk/langchain` on SQLite work
+  against it. The 0.1.0 known limitation no longer applies to such servers.
+  Unchanged behaviour: `guardDatabase()` still asks `/meta/config` and rejects
+  with `VerictoUnsupportedDialectError`, before any SQL runs, against a server
+  that does not list `sqlite`.
+
+### Added
+
+- `test/live/sqlite.live.test.ts`: an opt-in end-to-end test of
+  `@vericto/sdk/better-sqlite3` against a real Runtime API (allowed statements,
+  UPSERT, the SQLite rules VERICTO-098/099/100/101, DELETE without WHERE, scripts
+  with a blocked statement). Skipped unless `VERICTO_LIVE_SQLITE=1` and the
+  `VERICTO_*` variables are set; see "Live tests" in the README.
+
 ## [0.2.0] - unreleased
 
 ### Changed

@@ -8,9 +8,10 @@
  * before a `db.raw.transaction(...)` and use them inside it.
  *
  * SQLite has no server, so this wrapper is the enforcement point: SQL run through
- * `db.raw` or another connection to the same file is not checked. The `sqlite`
- * dialect is evaluated once the Vericto server lists it; until then
- * `guardDatabase` rejects with `VerictoUnsupportedDialectError` and no SQL runs.
+ * `db.raw` or another connection to the same file is not checked. The Vericto server
+ * evaluates the `sqlite` dialect (vericto-engine 4.1.0+); `guardDatabase` still asks
+ * it (`GET /api/v1/meta/config`) and rejects with `VerictoUnsupportedDialectError`,
+ * with no SQL run, against a server that does not list `sqlite`.
  */
 import { Vericto } from './guard.js';
 import { sqlToExecute, type Verdict } from './verdict.js';
@@ -87,7 +88,7 @@ function call(statement: unknown, method: string, params: unknown[]): unknown {
 
 /**
  * Guard a better-sqlite3 `Database`. Rejects with `VerictoUnsupportedDialectError`
- * when the server reports that it does not evaluate SQLite yet.
+ * when the server does not list the `sqlite` dialect.
  */
 export async function guardDatabase<D extends SqliteDatabaseLike>(
   db: D,

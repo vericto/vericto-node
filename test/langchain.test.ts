@@ -19,7 +19,7 @@ import {
   blockedMessage,
   dialectFromDataSource,
 } from '../src/langchain.js';
-import { FakeVericto, TODAY_DIALECTS, blocked, flagged, masked } from './fake-vericto.js';
+import { FakeVericto, DIALECTS_WITHOUT_SQLITE, blocked, flagged, masked } from './fake-vericto.js';
 
 /** A scripted LLM: answers in order and ignores stop sequences (the testing fakes echo them). */
 class ScriptedLLM extends LLM {
@@ -129,7 +129,7 @@ describe('VerictoSqlDatabase', () => {
   });
 
   it('fails fast on a dialect the server does not evaluate', async () => {
-    fake.dialects = [...TODAY_DIALECTS];
+    fake.dialects = [...DIALECTS_WITHOUT_SQLITE];
     await expect(open()).rejects.toThrow(/does not support the 'sqlite' dialect/);
   });
 

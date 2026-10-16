@@ -24,7 +24,11 @@ export class VerictoConfigError extends VerictoError {
   }
 }
 
-/** The Vericto server does not evaluate this dialect (yet). No SQL was executed. */
+/**
+ * The Vericto server does not evaluate this dialect (it is missing from
+ * `GET /api/v1/meta/config`, e.g. `sqlite` on a server older than vericto-engine
+ * 4.1.0). No SQL was executed.
+ */
 export class VerictoUnsupportedDialectError extends VerictoConfigError {
   readonly dialect: string;
   readonly supported: readonly string[];

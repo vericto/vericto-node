@@ -1,6 +1,7 @@
 /**
- * Dialects the Vericto engine evaluates today (vericto-engine 4.0.0), plus `sqlite`,
- * which the wrappers accept and evaluate once the server lists it.
+ * Dialects the Vericto engine evaluates (`sqlite` since vericto-engine 4.1.0). The
+ * wrappers still ask the server (`GET /api/v1/meta/config`) and refuse a dialect it
+ * does not list.
  */
 export const KNOWN_DIALECTS = ['postgres', 'mysql', 'oracle', 'mssql', 'snowflake', 'sqlite'] as const;
 

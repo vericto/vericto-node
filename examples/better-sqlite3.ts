@@ -1,5 +1,5 @@
-// Guard a better-sqlite3 database. SQLite is evaluated once the Vericto server lists
-// the `sqlite` dialect; until then guardDatabase rejects and no SQL runs.
+// Guard a better-sqlite3 database. The Vericto server evaluates the `sqlite` dialect;
+// against a server that does not list it, guardDatabase rejects and no SQL runs.
 import Database from 'better-sqlite3';
 
 import { VerictoBlockedError, VerictoUnsupportedDialectError } from '@vericto/sdk';
