@@ -288,6 +288,8 @@ npm ci
 npm run lint && npm run typecheck
 npm test            # vitest: local Runtime API stand-in, real better-sqlite3, fake snowflake-sdk,
                     # real LangChain.js + TypeORM with a scripted LLM (no model calls)
+npm run test:coverage  # the same suite with V8 coverage of src/ (what CI runs); fails under 80%
+                       # lines, statements, functions or branches. Live tests are excluded.
 npm run build       # tsup → dist/ (ESM + CJS + .d.ts)
 npm run smoke       # the built package, ESM and CJS, on any Node >= 18
 ```

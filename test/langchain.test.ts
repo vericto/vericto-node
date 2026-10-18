@@ -8,18 +8,20 @@ import { SqlDatabaseChain } from '@langchain/classic/chains/sql_db';
 import { QuerySqlTool } from '@langchain/classic/tools/sql';
 import { LLM } from '@langchain/core/language_models/llms';
 import { DataSource } from 'typeorm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { VerictoBlockedError, VerictoConfigError, VerictoUnavailableError } from '../src/index.js';
+import { VerictoBlockedError, VerictoConfigError, VerictoUnavailableError, verdictFromResponse } from '../src/index.js';
 import {
   VerictoCheckSqlTool,
   VerictoQuerySqlTool,
   VerictoSqlDatabase,
   VerictoSqlToolkit,
   blockedMessage,
+  describeVerdict,
   dialectFromDataSource,
+  guardDataSource,
 } from '../src/langchain.js';
-import { FakeVericto, DIALECTS_WITHOUT_SQLITE, blocked, flagged, masked } from './fake-vericto.js';
+import { API_KEY, DATABASE_ID, FakeVericto, DIALECTS_WITHOUT_SQLITE, blocked, flagged, masked } from './fake-vericto.js';
 
 /** A scripted LLM: answers in order and ignores stop sequences (the testing fakes echo them). */
 class ScriptedLLM extends LLM {
@@ -218,6 +220,45 @@ describe('tools, toolkit, agent and chain', () => {
     expect(() => new VerictoCheckSqlTool({ vericto: fake.guard() })).toThrow(/dialect/);
   });
 
+  it('VerictoQuerySqlTool lets "Vericto unavailable" through instead of answering the model', async () => {
+    const tool = new VerictoQuerySqlTool(await open());
+    for (let i = 0; i < 3; i++) fake.queue.push({ status: 503, body: {} });
+    await expect(tool.invoke('SELECT 1')).rejects.toBeInstanceOf(VerictoUnavailableError);
+    expect(VerictoQuerySqlTool.lc_name()).toBe('VerictoQuerySqlTool');
+  });
+
+  it('VerictoCheckSqlTool describes MONITORED and PARSE_ERROR verdicts', async () => {
+    fake.on((sql) => sql.startsWith('SELECT big'), { status: 200, body: { decision: 'MONITORED', rule_code: 'VERICTO-050' } });
+    fake.on((sql) => sql.startsWith('SELEC '), { status: 200, body: { decision: 'PARSE_ERROR', parse_error: 'unexpected SELEC' } });
+    fake.on((sql) => sql.startsWith('???'), { status: 200, body: { decision: 'PARSE_ERROR' } });
+    const tool = new VerictoCheckSqlTool({ vericto: fake.guard(), dialect: 'better-sqlite3' });
+    expect(tool.dialect).toBe('sqlite');
+    expect(await tool.invoke('SELECT big FROM t')).toBe('Vericto: MONITORED by VERICTO-050. The query is allowed to run.');
+    expect(await tool.invoke('SELEC 1')).toBe(
+      'Vericto could not parse the query (unexpected SELEC); the workspace policy allows it to run.',
+    );
+    expect(await tool.invoke('???')).toBe('Vericto could not parse the query; the workspace policy allows it to run.');
+    expect(VerictoCheckSqlTool.lc_name()).toBe('VerictoCheckSqlTool');
+  });
+
+  it('VerictoCheckSqlTool validates onBlock and builds its guard from the environment', async () => {
+    expect(() => new VerictoCheckSqlTool({ vericto: fake.guard(), dialect: 'sqlite', onBlock: 'skip' as 'raise' })).toThrow(
+      /onBlock/,
+    );
+    vi.stubEnv('VERICTO_API_KEY', API_KEY);
+    vi.stubEnv('VERICTO_DATABASE_ID', DATABASE_ID);
+    vi.stubEnv('VERICTO_API_URL', fake.url);
+    vi.stubEnv('VERICTO_FAIL_MODE', undefined);
+    try {
+      const tool = new VerictoCheckSqlTool({ dialect: 'postgres' });
+      expect(tool.onBlock).toBe('return');
+      expect(await tool.invoke('SELECT 1')).toBe('Vericto: ALLOWED. The query can run.');
+      expect(fake.requests[0]?.dialect).toBe('postgres');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('blockedMessage without a fix tells the model not to retry as is', () => {
     const text = blockedMessage({
       decision: 'BLOCKED',
@@ -231,5 +272,125 @@ describe('tools, toolkit, agent and chain', () => {
       raw: {},
     });
     expect(text).toContain('Do not retry the same query.');
+  });
+});
+
+const verdictOf = (body: Record<string, unknown>, sql = 'SELECT 1') => verdictFromResponse(body, sql, 'postgres');
+
+describe('messages for the model', () => {
+  it('blockedMessage includes the reason and the denied access', () => {
+    const text = blockedMessage(
+      verdictOf({
+        decision: 'BLOCKED',
+        rule_code: 'VERICTO-070',
+        error: 'agent may not read salaries',
+        access_denied: [{ table: 'salaries' }],
+      }),
+    );
+    expect(text.split('\n')).toEqual([
+      'Vericto blocked this SQL query; it was NOT executed.',
+      'Rule: VERICTO-070',
+      'Reason: agent may not read salaries',
+      'Access denied: [{"table":"salaries"}]',
+      'Rewrite the query so that it complies with the rule, and try again. Do not retry the same query.',
+    ]);
+    expect(blockedMessage(verdictOf({ decision: 'BLOCKED' }))).toContain('Rule: a Vericto rule');
+  });
+
+  it('describeVerdict covers every decision', () => {
+    expect(describeVerdict(verdictOf({ decision: 'ALLOWED' }))).toBe('Vericto: ALLOWED. The query can run.');
+    expect(describeVerdict(verdictOf({ decision: 'FLAGGED' }))).toBe(
+      'Vericto: FLAGGED. The query is allowed to run, but it was reported.',
+    );
+    expect(describeVerdict(verdictOf({ decision: 'FLAGGED', rule_code: 'VERICTO-030', severity: 'medium' }))).toBe(
+      'Vericto: FLAGGED by VERICTO-030 (severity medium). The query is allowed to run, but it was reported.',
+    );
+    expect(describeVerdict(verdictOf({ decision: 'MONITORED' }))).toBe('Vericto: MONITORED. The query is allowed to run.');
+    const blockedText = describeVerdict(verdictOf({ decision: 'BLOCKED', rule_code: 'VERICTO-001' }));
+    expect(blockedText.startsWith('Vericto blocked this SQL query.\nRule: VERICTO-001')).toBe(true);
+    expect(blockedText).not.toContain('NOT executed');
+  });
+
+  it('describeVerdict shows the masked rewrite that will run', () => {
+    const text = describeVerdict(verdictOf({ decision: 'ALLOWED', rewritten_query: "SELECT '***' AS ssn FROM p" }, 'SELECT ssn FROM p'));
+    expect(text).toBe(
+      "Vericto: ALLOWED. The query can run.\nIt reads sensitive columns, so it will run masked, as: SELECT '***' AS ssn FROM p",
+    );
+  });
+});
+
+describe('guardDataSource and construction options', () => {
+  it('checks query(), passes parameters through, and leaves everything else to the data source', async () => {
+    const guarded = guardDataSource(ds, fake.guard(), 'better-sqlite3');
+    expect(await guarded.query('SELECT email FROM users WHERE id = ?', [2])).toEqual([{ email: 'bo@example.com' }]);
+    expect(fake.requests[0]).toMatchObject({ query: 'SELECT email FROM users WHERE id = ?', dialect: 'sqlite' });
+    expect(JSON.stringify(fake.requests)).not.toContain('bo@example.com');
+    expect(guarded.isInitialized).toBe(true);
+    expect(guarded.options.type).toBe('better-sqlite3');
+    expect(guarded.driver).toBe(ds.driver);
+    // Methods other than query() are bound to the original and are not checked.
+    expect(await guarded.createQueryRunner().query('SELECT 1 AS one')).toEqual([{ one: 1 }]);
+    expect(fake.requests).toHaveLength(1);
+  });
+
+  it('a blocked query() rejects and nothing runs', async () => {
+    fake.on((sql) => sql.startsWith('DELETE'), blocked());
+    const guarded = guardDataSource(ds, fake.guard(), 'sqlite');
+    await expect(guarded.query('DELETE FROM users')).rejects.toBeInstanceOf(VerictoBlockedError);
+    expect(await count()).toBe(2);
+  });
+
+  it('an explicit dialect wins over the data source type and is normalized', async () => {
+    const db = await VerictoSqlDatabase.fromDataSourceParams({ appDataSource: ds, vericto: fake.guard(), dialect: 'SQLite3' });
+    expect(db.dialect).toBe('sqlite');
+    expect(db.onBlock).toBe('return');
+    expect(db.rawDataSource).toBe(ds);
+  });
+
+  it('fromOptionsParams builds and guards its own data source', async () => {
+    const db = await VerictoSqlDatabase.fromOptionsParams({
+      appDataSourceOptions: { type: 'better-sqlite3', database: ':memory:' },
+      vericto: fake.guard(),
+    });
+    try {
+      expect(db).toBeInstanceOf(VerictoSqlDatabase);
+      expect(db.dialect).toBe('sqlite');
+      expect(await db.run('SELECT 41 + 1 AS answer')).toBe('[{"answer":42}]');
+      expect(fake.queries()).toEqual(['SELECT 41 + 1 AS answer']);
+    } finally {
+      await db.rawDataSource.destroy();
+    }
+  });
+
+  it('builds its guard from the VERICTO_* environment by default', async () => {
+    vi.stubEnv('VERICTO_API_KEY', API_KEY);
+    vi.stubEnv('VERICTO_DATABASE_ID', DATABASE_ID);
+    vi.stubEnv('VERICTO_API_URL', fake.url);
+    vi.stubEnv('VERICTO_FAIL_MODE', undefined);
+    try {
+      const db = await VerictoSqlDatabase.fromDataSourceParams({ appDataSource: ds });
+      expect(JSON.parse(await db.run('SELECT id FROM users WHERE id = 1'))).toEqual([{ id: 1 }]);
+      expect(fake.requests[0]?.headers['x-api-key']).toBe(API_KEY);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each([
+    ['aurora-postgres', 'postgres'],
+    ['aurora-mysql', 'mysql'],
+    ['mysql', 'mysql'],
+    ['sqlite', 'sqlite'],
+    ['better-sqlite3', 'sqlite'],
+    ['sqljs', 'sqlite'],
+  ])('maps the TypeORM type %s to %s', (type, dialect) => {
+    expect(dialectFromDataSource({ options: { type } } as Parameters<typeof dialectFromDataSource>[0])).toBe(dialect);
+  });
+
+  it('names the unsupported TypeORM type and the way out', () => {
+    const cockroach = { options: { type: 'cockroachdb' } } as Parameters<typeof dialectFromDataSource>[0];
+    expect(() => dialectFromDataSource(cockroach)).toThrow(
+      /no Vericto dialect for the TypeORM type 'cockroachdb'.*or pass \{ dialect \}/,
+    );
   });
 });

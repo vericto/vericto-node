@@ -1,9 +1,11 @@
 /** snowflake-sdk wrapper against a fake connection: nothing connects to Snowflake. */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { Readable } from 'node:stream';
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { VerictoBlockedError, VerictoUnavailableError, VerictoUnsupportedDialectError } from '../src/index.js';
 import { guardConnection, type GuardedSnowflakeConnection } from '../src/snowflake.js';
-import { FakeVericto, blocked, masked } from './fake-vericto.js';
+import { API_KEY, DATABASE_ID, FakeVericto, blocked, masked } from './fake-vericto.js';
 
 type Complete = (err: unknown, stmt: unknown, rows?: unknown[]) => void;
 interface StatementOption {
@@ -104,4 +106,131 @@ describe('snowflake-sdk', () => {
     fake.dialects = ['postgres'];
     await expect(guardConnection(raw, { vericto: fake.guard() })).rejects.toBeInstanceOf(VerictoUnsupportedDialectError);
   });
+
+  it('streams: streamResult reaches the driver and the resolved statement streams the rows', async () => {
+    const streaming = new StreamingConnection([{ ID: 1 }, { ID: 2 }, { ID: 3 }]);
+    const guarded = await guardConnection(streaming, { vericto: fake.guard() });
+    const statement = await guarded.execute({ sqlText: 'SELECT id FROM orders', streamResult: true });
+    const rows: unknown[] = [];
+    for await (const row of statement!.streamRows()) rows.push(row);
+    expect(rows).toEqual([{ ID: 1 }, { ID: 2 }, { ID: 3 }]);
+    expect(streaming.executed).toEqual([{ sqlText: 'SELECT id FROM orders', streamResult: true }]);
+  });
+
+  it('a blocked streaming statement never reaches the driver', async () => {
+    fake.on((sql) => sql.startsWith('SELECT *'), blocked('VERICTO-030'));
+    const streaming = new StreamingConnection([{ ID: 1 }]);
+    const guarded = await guardConnection(streaming, { vericto: fake.guard() });
+    await expect(guarded.execute({ sqlText: 'SELECT * FROM orders', streamResult: true })).rejects.toBeInstanceOf(
+      VerictoBlockedError,
+    );
+    expect(streaming.executed).toEqual([]);
+  });
+
+  it('async: concurrent executes are each checked and each run with their own SQL', async () => {
+    fake.on((sql) => sql === 'DELETE FROM b', blocked());
+    const results = await Promise.allSettled([
+      conn.query('SELECT a FROM a'),
+      conn.query('DELETE FROM b'),
+      conn.query('SELECT c FROM c'),
+    ]);
+    expect(results.map((r) => r.status)).toEqual(['fulfilled', 'rejected', 'fulfilled']);
+    expect(raw.executed.map((o) => o.sqlText).sort()).toEqual(['SELECT a FROM a', 'SELECT c FROM c']);
+    expect(fake.queries().sort()).toEqual(['DELETE FROM b', 'SELECT a FROM a', 'SELECT c FROM c']);
+  });
+
+  it('passes binds through to the driver and never sends their values to Vericto', async () => {
+    const rows = await conn.query('SELECT * FROM t WHERE email = :1 AND id = :2', ['ana@example.com', 42]);
+    expect(rows).toEqual([{ SQL: 'SELECT * FROM t WHERE email = :1 AND id = :2', BINDS: ['ana@example.com', 42] }]);
+    expect(JSON.stringify(fake.requests)).not.toContain('ana@example.com');
+    await conn.query('SELECT 1');
+    expect(raw.executed[1]).not.toHaveProperty('binds');
+  });
+
+  it('the masked rewrite keeps every other driver option', async () => {
+    fake.on((sql) => sql.startsWith('SELECT email'), masked("SELECT '***' AS email FROM users"));
+    const complete: Complete = () => undefined;
+    await conn.execute({ sqlText: 'SELECT email FROM users', binds: [1], parameters: { QUERY_TAG: 't' }, complete });
+    expect(raw.executed[0]).toEqual({
+      sqlText: "SELECT '***' AS email FROM users",
+      binds: [1],
+      parameters: { QUERY_TAG: 't' },
+      complete,
+    });
+  });
+
+  it('delivers "Vericto unavailable" to complete when one is given', async () => {
+    for (let i = 0; i < 3; i++) fake.queue.push({ status: 503, body: {} });
+    const err = await new Promise<unknown>((resolve) => {
+      void conn.execute({ sqlText: 'SELECT 1', complete: (e) => { resolve(e); } });
+    });
+    expect(err).toBeInstanceOf(VerictoUnavailableError);
+    expect(raw.executed).toEqual([]);
+  });
+
+  it('fails open: runs the original statement unevaluated when Vericto is down', async () => {
+    const emit = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
+    try {
+      const open = await guardConnection(raw, { vericto: fake.guard({ failMode: 'open' }) });
+      await fake.stop();
+      expect(await open.query('SELECT 1')).toEqual([{ SQL: 'SELECT 1', BINDS: null }]);
+      expect(emit).toHaveBeenCalledOnce();
+    } finally {
+      emit.mockRestore();
+      await fake.start();
+    }
+  });
+
+  it.each([
+    ['an Error', new Error('SQL compilation error'), 'SQL compilation error'],
+    ['a string', 'Network is down', 'Network is down'],
+    ['an object', { code: 390100 }, '{"code":390100}'],
+  ])('query() rejects with an Error when the driver reports %s', async (_name, driverError, message) => {
+    const failing = new FailingConnection(driverError);
+    const guarded = await guardConnection(failing, { vericto: fake.guard() });
+    const err = await guarded.query('SELECT 1').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe(message);
+  });
+
+  it('query() rejects when the driver throws synchronously', async () => {
+    const throwing = { execute: () => { throw new Error('not connected'); } };
+    const guarded = await guardConnection(throwing, { vericto: fake.guard() });
+    await expect(guarded.query('SELECT 1')).rejects.toThrow('not connected');
+  });
+
+  it('builds its guard from the VERICTO_* environment by default', async () => {
+    vi.stubEnv('VERICTO_API_KEY', API_KEY);
+    vi.stubEnv('VERICTO_DATABASE_ID', DATABASE_ID);
+    vi.stubEnv('VERICTO_API_URL', fake.url);
+    vi.stubEnv('VERICTO_FAIL_MODE', undefined);
+    try {
+      const guarded = await guardConnection(raw);
+      expect(guarded.raw).toBe(raw);
+      expect(guarded.vericto.failMode).toBe('closed');
+      await guarded.query('SELECT 1');
+      expect(fake.requests[0]?.headers['x-api-key']).toBe(API_KEY);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });
+
+/** Mimics `streamResult: true`: the statement's rows come from `streamRows()`. */
+class StreamingConnection {
+  readonly executed: Record<string, unknown>[] = [];
+  constructor(readonly rows: Record<string, unknown>[]) {}
+  execute(options: { sqlText: string; streamResult?: boolean; complete?: Complete }): { streamRows(): Readable } {
+    this.executed.push(options);
+    return { streamRows: () => Readable.from(this.rows) };
+  }
+}
+
+/** A connection whose statements always fail in the driver. */
+class FailingConnection {
+  constructor(readonly error: unknown) {}
+  execute(options: { sqlText: string; complete?: Complete }): object {
+    setImmediate(() => options.complete?.(this.error, {}, undefined));
+    return {};
+  }
+}

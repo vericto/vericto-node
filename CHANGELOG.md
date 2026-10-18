@@ -6,6 +6,17 @@ All notable changes to this package are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Development: `npm run test:coverage` (V8 coverage of `src/`, `@vitest/coverage-v8`)
+  with an 80% threshold for lines, statements, functions and branches; CI runs it
+  in place of `npm test`. New offline tests for the Runtime API error paths
+  (401/403/400/413, redirects, malformed JSON, timeouts, network errors,
+  `Retry-After` and backoff, the dialect list cache), the guard (fail modes,
+  logging, verdict cache), verdict parsing, dialects, errors, snowflake-sdk
+  streaming and binds, better-sqlite3 `iterate` and transactions, and LangChain.js
+  construction paths. No change to the published package.
+
 ## [0.2.1] - 2026-10-17
 
 ### Changed
