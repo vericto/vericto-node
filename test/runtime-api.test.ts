@@ -4,6 +4,7 @@ import { createServer } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  DEFAULT_API_URL,
   RuntimeApiEvaluator,
   VERSION,
   VerictoConfigError,
@@ -253,6 +254,84 @@ describe('configuration', () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  describe('an empty or whitespace-only variable is unset', () => {
+    const blanks = ['', ' ', '\t', ' \n '];
+    const valid = { VERICTO_API_KEY: API_KEY, VERICTO_DATABASE_ID: DATABASE_ID };
+
+    it.each(blanks)('VERICTO_API_KEY=%j: no key', (value) => {
+      expect(() => new RuntimeApiEvaluator({ env: { ...valid, VERICTO_API_KEY: value } })).toThrow(
+        /^No Vericto API key: pass apiKey or set VERICTO_API_KEY/,
+      );
+    });
+
+    it.each(blanks)('VERICTO_DATABASE_ID=%j: no database id', (value) => {
+      expect(() => new RuntimeApiEvaluator({ env: { ...valid, VERICTO_DATABASE_ID: value } })).toThrow(
+        /^No Vericto database id: pass databaseId or set VERICTO_DATABASE_ID/,
+      );
+    });
+
+    it.each(blanks)('VERICTO_API_URL=%j: the default URL', (value) => {
+      expect(new RuntimeApiEvaluator({ env: { ...valid, VERICTO_API_URL: value } }).apiUrl).toBe(DEFAULT_API_URL);
+    });
+
+    it.each(blanks)('VERICTO_TIMEOUT=%j: the default 5 s', (value) => {
+      expect(new RuntimeApiEvaluator({ env: { ...valid, VERICTO_TIMEOUT: value } }).timeoutMs).toBe(5000);
+    });
+
+    it('a blank variable never hides the option', () => {
+      const ev = new RuntimeApiEvaluator({
+        env: { VERICTO_API_KEY: '', VERICTO_DATABASE_ID: ' ', VERICTO_API_URL: '', VERICTO_TIMEOUT: ' ' },
+        apiKey: API_KEY,
+        databaseId: DATABASE_ID,
+        apiUrl: 'https://eu.vericto.example',
+        timeoutMs: 250,
+      });
+      expect([ev.apiUrl, ev.databaseId, ev.timeoutMs]).toEqual(['https://eu.vericto.example', DATABASE_ID, 250]);
+    });
+
+    it('in process.env too', () => {
+      vi.stubEnv('VERICTO_API_KEY', API_KEY);
+      vi.stubEnv('VERICTO_DATABASE_ID', DATABASE_ID);
+      vi.stubEnv('VERICTO_API_URL', '  ');
+      vi.stubEnv('VERICTO_TIMEOUT', '');
+      try {
+        const ev = new RuntimeApiEvaluator();
+        expect([ev.apiUrl, ev.timeoutMs]).toEqual([DEFAULT_API_URL, 5000]);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+  });
+
+  describe('an invalid non-empty variable still throws', () => {
+    const valid = { VERICTO_API_KEY: API_KEY, VERICTO_DATABASE_ID: DATABASE_ID };
+    const make = (env: Record<string, string>) => () => new RuntimeApiEvaluator({ env: { ...valid, ...env } });
+
+    it('VERICTO_API_KEY without the vtro_ prefix', () => {
+      expect(make({ VERICTO_API_KEY: ' sk-secret-value ' })).toThrow(/must start with 'vtro_'/);
+    });
+
+    it('VERICTO_DATABASE_ID that is not a UUID', () => {
+      expect(make({ VERICTO_DATABASE_ID: 'prod' })).toThrow(/must be a UUID/);
+    });
+
+    it.each(['not a url', 'ftp://api.vericto.com'])('VERICTO_API_URL=%j', (value) => {
+      expect(make({ VERICTO_API_URL: value })).toThrow(/Invalid Vericto API URL/);
+    });
+
+    it('VERICTO_API_URL over plain HTTP off localhost', () => {
+      expect(make({ VERICTO_API_URL: 'http://api.example.com' })).toThrow(/plain HTTP/);
+    });
+
+    it.each(['soon', '5s', 'NaN'])('VERICTO_TIMEOUT=%j', (value) => {
+      expect(make({ VERICTO_TIMEOUT: value })).toThrow(/^VERICTO_TIMEOUT must be a number of seconds/);
+    });
+
+    it.each(['0', '-1'])('VERICTO_TIMEOUT=%j (not positive)', (value) => {
+      expect(make({ VERICTO_TIMEOUT: value })).toThrow(/timeoutMs must be greater than 0/);
+    });
   });
 
   it('requires a fetch implementation', () => {

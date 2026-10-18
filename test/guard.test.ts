@@ -295,13 +295,35 @@ describe('Vericto guard: fail mode', () => {
     expect(() => new Vericto({ evaluator: stub, env: { VERICTO_FAIL_MODE: 'yes' } })).toThrow(/'closed' or 'open'/);
   });
 
-  // Known issue: an empty VERICTO_FAIL_MODE (e.g. `VERICTO_FAIL_MODE=` or a CI variable
-  // that is not set) throws VerictoConfigError, while an empty VERICTO_API_URL or
-  // VERICTO_TIMEOUT falls back to its documented default. The README documents
-  // `closed` as the default. It fails safe (nothing runs unchecked), so the behaviour
-  // is left unchanged here; this test flips to passing once empty means "unset".
-  it.fails('an empty VERICTO_FAIL_MODE means the default, closed', () => {
-    expect(new Vericto({ evaluator: new StubEvaluator(), env: { VERICTO_FAIL_MODE: '' } }).failMode).toBe('closed');
+  // `VERICTO_FAIL_MODE=` or a CI variable that expands to nothing is unset, as for every
+  // other VERICTO_* variable: the documented default, closed. It used to throw.
+  it.each(['', ' ', '\t', ' \n '])('an empty or whitespace-only VERICTO_FAIL_MODE (%j) means closed', (value) => {
+    expect(new Vericto({ evaluator: new StubEvaluator(), env: { VERICTO_FAIL_MODE: value } }).failMode).toBe('closed');
+  });
+
+  it('an empty VERICTO_FAIL_MODE does not override the option', () => {
+    const g = new Vericto({ evaluator: new StubEvaluator(), env: { VERICTO_FAIL_MODE: '' }, failMode: 'open' });
+    expect(g.failMode).toBe('open');
+  });
+
+  it.each(['yes', 'opened', 'fail-open', '0', ' close '])('an invalid VERICTO_FAIL_MODE (%j) still throws', (value) => {
+    const make = () => new Vericto({ evaluator: new StubEvaluator(), env: { VERICTO_FAIL_MODE: value } });
+    expect(make).toThrow(VerictoConfigError);
+    expect(make).toThrow(/^VERICTO_FAIL_MODE must be 'closed' or 'open'/);
+  });
+
+  it('an invalid failMode option is reported as the option', () => {
+    const make = () => new Vericto({ evaluator: new StubEvaluator(), env: { VERICTO_FAIL_MODE: 'open' }, failMode: '' as 'open' });
+    expect(make).toThrow(/^failMode must be 'closed' or 'open', got ""/);
+  });
+
+  it('an empty VERICTO_FAIL_MODE in process.env means closed', () => {
+    vi.stubEnv('VERICTO_FAIL_MODE', '');
+    try {
+      expect(new Vericto({ evaluator: new StubEvaluator() }).failMode).toBe('closed');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 
