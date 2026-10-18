@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Vericto S.A.S.
+// SPDX-License-Identifier: Apache-2.0
+
 // Guard a better-sqlite3 database. The Vericto server evaluates the `sqlite` dialect;
 // against a server that does not list it, guardDatabase rejects and no SQL runs.
 import Database from 'better-sqlite3';

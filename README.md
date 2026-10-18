@@ -356,7 +356,12 @@ not in public issues.
 
 ## License
 
-[Elastic License 2.0](LICENSE).
+Open source under the [Apache License 2.0](LICENSE) (SPDX `Apache-2.0`) since
+0.3.0. Versions 0.2.2 and earlier were released under the Elastic License 2.0
+and remain under it. Copyright 2026 Vericto S.A.S.; see [NOTICE](NOTICE). The
+license grants no right to the Vericto name or logo: see
+[TRADEMARKS.md](TRADEMARKS.md). The Vericto service the SDK calls is offered
+under its own [terms](https://vericto.com/terms).
 
 ---
 
@@ -386,3 +391,8 @@ SQLite: el servidor de Vericto evalúa el dialecto `sqlite` (vericto-engine
 4.1.0+). `guardDatabase()` igual consulta `GET /api/v1/meta/config` y, si un
 servidor no lo anuncia, rechaza con `VerictoUnsupportedDialectError` sin ejecutar
 nada.
+
+Licencia: código abierto bajo la [Apache License 2.0](LICENSE) desde 0.3.0. Las
+versiones 0.2.2 y anteriores se publicaron bajo la Elastic License 2.0 y siguen
+bajo ella. La licencia no otorga derechos sobre la marca Vericto
+([TRADEMARKS.md](TRADEMARKS.md)).

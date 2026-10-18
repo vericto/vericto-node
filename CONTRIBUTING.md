@@ -1,8 +1,8 @@
 # Contributing to @vericto/sdk
 
 Thanks for your interest in improving the Vericto SDK for Node.js. This guide
-covers the `@vericto/sdk` package in this repository, which is source-available
-under the [Elastic License 2.0](LICENSE).
+covers the `@vericto/sdk` package in this repository, which is open source
+under the [Apache License 2.0](LICENSE).
 
 ## Code of Conduct
 
@@ -64,7 +64,7 @@ under `test/live/` are opt-in and never run in CI (see the README,
    npm run smoke
    ```
    CI also checks that `npm pack` publishes only `dist/`, `README.md`,
-   `CHANGELOG.md`, `SECURITY.md`, `LICENSE` and `package.json`; if you change
+   `CHANGELOG.md`, `SECURITY.md`, `LICENSE`, `NOTICE` and `package.json`; if you change
    `files` in `package.json`, run `npm pack --dry-run` and check the list.
 4. Open a PR using the template. Keep PRs focused and under ~500 lines.
 
@@ -140,6 +140,11 @@ or email [security@vericto.com](mailto:security@vericto.com).
 
 ## License
 
-@vericto/sdk is source-available under the [Elastic License 2.0](LICENSE). For
+@vericto/sdk is open source under the [Apache License 2.0](LICENSE) since 0.3.0
+(versions 0.2.2 and earlier remain under the Elastic License 2.0). Unless you
+state otherwise, a contribution you submit for inclusion is under the Apache
+License 2.0, as its section 5 says, without additional terms or conditions;
+no contributor agreement is needed. Add the `SPDX-FileCopyrightText` and
+`SPDX-License-Identifier: Apache-2.0` header to new source files. For
 questions about licensing a contribution, write to
 [legal@vericto.com](mailto:legal@vericto.com) before opening the pull request.

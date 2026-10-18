@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Vericto S.A.S.
+// SPDX-License-Identifier: Apache-2.0
+
 /** Reading a Runtime API response body into a Verdict: no network involved. */
 import { describe, expect, it } from 'vitest';
 

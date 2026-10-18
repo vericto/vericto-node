@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Vericto S.A.S.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * Dialects the Vericto engine evaluates (`sqlite` since vericto-engine 4.1.0). The
  * wrappers still ask the server (`GET /api/v1/meta/config`) and refuse a dialect it

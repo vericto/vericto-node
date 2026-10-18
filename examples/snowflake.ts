@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Vericto S.A.S.
+// SPDX-License-Identifier: Apache-2.0
+
 // Guard a snowflake-sdk connection.
 //   VERICTO_API_KEY=vtro_... VERICTO_DATABASE_ID=<uuid> node --experimental-strip-types examples/snowflake.ts
 import snowflake from 'snowflake-sdk';

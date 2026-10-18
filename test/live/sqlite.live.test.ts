@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Vericto S.A.S.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * Opt-in end-to-end test of `@vericto/sdk/better-sqlite3` against a real Vericto
  * Runtime API. Skipped unless configured; never run in CI.

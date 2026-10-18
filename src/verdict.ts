@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Vericto S.A.S.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * What Vericto decided. `UNEVALUATED` is local: Vericto could not answer and the
  * guard runs with `failMode: 'open'`, so the statement ran without a verdict.

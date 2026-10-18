@@ -6,6 +6,31 @@ All notable changes to this package are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-18
+
+**Now open source under the Apache License 2.0.** From this version on,
+`@vericto/sdk` is licensed under the Apache License, Version 2.0 (SPDX
+`Apache-2.0`) instead of the Elastic License 2.0. **All previously released
+versions, 0.2.2 and earlier, remain under the Elastic License 2.0.** No code
+change: the package behaves exactly as 0.2.2.
+
+### Changed
+
+- **License: Apache-2.0.** `LICENSE` is the Apache License 2.0 text from
+  apache.org, verbatim. New `NOTICE` (product name and copyright, Vericto
+  S.A.S.), which the license asks redistributors to keep and which the npm
+  package now carries (`files` in `package.json`, and the CI package-contents
+  check), and `TRADEMARKS.md`: the license grants no right to the Vericto name
+  or logo.
+- `package.json` and `package-lock.json`: `"license": "Apache-2.0"` and version
+  0.3.0 (`VERSION` too).
+- Every TypeScript and JavaScript source file starts with
+  `SPDX-FileCopyrightText` and `SPDX-License-Identifier: Apache-2.0` lines (the
+  REUSE convention).
+- README (License section, in English and Spanish) and CONTRIBUTING name the
+  new license. Contributions are accepted under the Apache License 2.0
+  (inbound = outbound, its section 5); no contributor agreement is needed.
+
 ## [0.2.2] - 2026-10-18
 
 ### Fixed

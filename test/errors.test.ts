@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Vericto S.A.S.
+// SPDX-License-Identifier: Apache-2.0
+
 /** The error hierarchy callers branch on, and the messages they show. */
 import { describe, expect, it } from 'vitest';
 
