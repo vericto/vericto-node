@@ -1,18 +1,12 @@
-# Publish to npm when a version tag (v0.2.0, ...) is pushed. Prepared, not yet run.
+# Publish to npm when a version tag (v0.2.1, ...) is pushed.
 #
-# npm trusted publishing (OIDC) with provenance: no npm token is stored. Before the
-# first tag:
-#   1. Create the `npm` environment in the repository settings (required reviewer).
-#   2. On npmjs.com, package @vericto/sdk → Settings → Trusted publishing → GitHub
-#      Actions: organization `vericto`, repository `vericto-node`, workflow
-#      `release.yml`, environment `npm`.
-#      If npm requires the package to exist before a trusted publisher can be added,
-#      do the very first publish with a granular, short-lived token stored as the
-#      `NPM_TOKEN` secret of the `npm` environment (the step below uses it only when
-#      it is set), then add the trusted publisher and delete the token.
+# npm trusted publishing (OIDC) with provenance: no npm token is stored. The trusted
+# publisher is configured on npmjs.com (package @vericto/sdk → Settings → Trusted
+# publishing): organization `vericto`, repository `vericto-node`, workflow
+# `release.yml`, environment `npm`. The `npm` environment has a required reviewer.
 #
 # GitHub-hosted runner on purpose: npm provenance is generated only on cloud-hosted
-# runners, and releases happen once the repository is public.
+# runners.
 name: Release
 
 on:
@@ -51,8 +45,6 @@ jobs:
       - run: npm run lint && npm run typecheck && npm test
       - run: npm run build && npm run smoke
       - name: Publish with provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public --provenance
 
   github-release:

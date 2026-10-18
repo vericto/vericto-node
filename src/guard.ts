@@ -1,4 +1,5 @@
 import { normalizeDialect } from './dialects.js';
+import { defaultEnv, readEnv } from './env.js';
 import {
   VerictoBlockedError,
   VerictoConfigError,
@@ -58,10 +59,12 @@ export class Vericto {
 
   constructor(options: VerictoOptions = {}) {
     this.evaluator = options.evaluator ?? new RuntimeApiEvaluator(options);
-    const env = options.env ?? (typeof process !== 'undefined' ? process.env : {});
-    const mode = (options.failMode ?? env.VERICTO_FAIL_MODE ?? 'closed').trim().toLowerCase();
+    // An empty or whitespace-only VERICTO_FAIL_MODE is unset: the default, closed.
+    const fromEnv = readEnv(defaultEnv(options.env), 'VERICTO_FAIL_MODE');
+    const source = options.failMode === undefined && fromEnv !== undefined ? 'VERICTO_FAIL_MODE' : 'failMode';
+    const mode = (options.failMode ?? fromEnv ?? 'closed').trim().toLowerCase();
     if (mode !== 'closed' && mode !== 'open') {
-      throw new VerictoConfigError(`failMode must be 'closed' or 'open', got ${JSON.stringify(mode)}.`);
+      throw new VerictoConfigError(`${source} must be 'closed' or 'open', got ${JSON.stringify(mode)}.`);
     }
     this.failMode = mode;
     const ttl = options.cacheTtlMs ?? 0;

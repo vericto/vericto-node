@@ -1,6 +1,6 @@
 {
   "name": "@vericto/sdk",
-  "version": "0.2.0",
+  "version": "0.2.2",
   "description": "Official Vericto SDK for Node.js: check every SQL statement with Vericto before it runs. Wrappers for snowflake-sdk and better-sqlite3, LangChain.js SQL agents, and a client for the Vericto Runtime API.",
   "license": "Elastic-2.0",
   "author": "Vericto <security@vericto.com>",
@@ -44,6 +44,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage --exclude 'test/live/**'",
     "smoke": "node scripts/smoke.mjs",
     "prepack": "tsup --silent"
   },
@@ -67,6 +68,7 @@
     "@langchain/core": "1.2.17",
     "@types/better-sqlite3": "7.6.13",
     "@types/node": "22.20.5",
+    "@vitest/coverage-v8": "5.0.4",
     "better-sqlite3": "13.0.3",
     "eslint": "10.12.0",
     "tsup": "9.0.0",

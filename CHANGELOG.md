@@ -6,6 +6,38 @@ All notable changes to this package are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-18
+
+### Fixed
+
+- An empty or whitespace-only `VERICTO_*` variable now counts as unset, for
+  every variable the SDK reads. `VERICTO_FAIL_MODE=` (or a CI variable that
+  expands to nothing) threw `VerictoConfigError` instead of meaning the
+  documented default, `closed`; `VERICTO_API_URL` and `VERICTO_TIMEOUT` already
+  fell back, and a blank `VERICTO_API_KEY` or `VERICTO_DATABASE_ID` is reported
+  as missing, as before. An invalid non-empty value still throws, and an error
+  about `VERICTO_FAIL_MODE` now names the variable rather than the `failMode`
+  option.
+
+### Added
+
+- Development: `npm run test:coverage` (V8 coverage of `src/`, `@vitest/coverage-v8`)
+  with an 80% threshold for lines, statements, functions and branches; CI runs it
+  in place of `npm test`. New offline tests for the Runtime API error paths
+  (401/403/400/413, redirects, malformed JSON, timeouts, network errors,
+  `Retry-After` and backoff, the dialect list cache), the guard (fail modes,
+  logging, verdict cache), verdict parsing, dialects, errors, snowflake-sdk
+  streaming and binds, better-sqlite3 `iterate` and transactions, and LangChain.js
+  construction paths. No change to the published package.
+
+## [0.2.1] - 2026-10-17
+
+### Changed
+
+- Releases are published only through npm trusted publishing (OIDC) with
+  provenance. The release workflow no longer reads an npm token; 0.2.0 was the
+  one-time bootstrap publish. No code changes.
+
 ## [0.2.0] - 2026-10-16
 
 ### Changed
@@ -79,5 +111,7 @@ the Vericto Runtime API (`POST /api/v1/proxy/query`).
   `guardDatabase()` rejects with `VerictoUnsupportedDialectError` until the server
   lists it.
 
+[0.2.2]: https://github.com/vericto/vericto-node/releases/tag/v0.2.2
+[0.2.1]: https://github.com/vericto/vericto-node/releases/tag/v0.2.1
 [0.2.0]: https://github.com/vericto/vericto-node/releases/tag/v0.2.0
 [0.1.0]: https://github.com/vericto/vericto-node/releases/tag/v0.1.0

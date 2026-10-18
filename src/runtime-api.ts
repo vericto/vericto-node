@@ -1,3 +1,4 @@
+import { defaultEnv, readEnv, type Env } from './env.js';
 import {
   VerictoConfigError,
   VerictoQuotaExceededError,
@@ -36,8 +37,11 @@ export interface RuntimeApiOptions {
   dialectsTtlMs?: number;
   /** A `fetch` implementation (tests, proxies). Default: the global `fetch`. */
   fetch?: FetchLike;
-  /** Environment to read the defaults from. Default: `process.env`. */
-  env?: Record<string, string | undefined>;
+  /**
+   * Environment to read the defaults from. Default: `process.env`. An empty or
+   * whitespace-only variable counts as unset.
+   */
+  env?: Env;
 }
 
 /**
@@ -61,8 +65,8 @@ export class RuntimeApiEvaluator implements Evaluator {
   #dialectsPending: Promise<readonly string[] | undefined> | undefined;
 
   constructor(options: RuntimeApiOptions = {}) {
-    const env = options.env ?? (typeof process !== 'undefined' ? process.env : {});
-    const key = (options.apiKey ?? env.VERICTO_API_KEY ?? '').trim();
+    const env = defaultEnv(options.env);
+    const key = (options.apiKey ?? readEnv(env, 'VERICTO_API_KEY') ?? '').trim();
     if (!key) {
       throw new VerictoConfigError(
         'No Vericto API key: pass apiKey or set VERICTO_API_KEY (a vtro_... key with the proxy:evaluate scope).',
@@ -73,7 +77,7 @@ export class RuntimeApiEvaluator implements Evaluator {
     }
     this.#apiKey = key;
 
-    const db = (options.databaseId ?? env.VERICTO_DATABASE_ID ?? '').trim();
+    const db = (options.databaseId ?? readEnv(env, 'VERICTO_DATABASE_ID') ?? '').trim();
     if (!db) {
       throw new VerictoConfigError(
         'No Vericto database id: pass databaseId or set VERICTO_DATABASE_ID ' +
@@ -85,7 +89,8 @@ export class RuntimeApiEvaluator implements Evaluator {
     }
     this.databaseId = db.toLowerCase();
 
-    const url = ((options.apiUrl ?? env.VERICTO_API_URL ?? '').trim() || DEFAULT_API_URL).replace(/\/+$/, '');
+    const rawUrl = options.apiUrl ?? readEnv(env, 'VERICTO_API_URL') ?? '';
+    const url = (rawUrl.trim() || DEFAULT_API_URL).replace(/\/+$/, '');
     let parsed: URL;
     try {
       parsed = new URL(url);
@@ -102,8 +107,8 @@ export class RuntimeApiEvaluator implements Evaluator {
 
     let timeoutMs = options.timeoutMs;
     if (timeoutMs === undefined) {
-      const fromEnv = (env.VERICTO_TIMEOUT ?? '').trim();
-      timeoutMs = fromEnv ? Number(fromEnv) * 1000 : 5000;
+      const fromEnv = readEnv(env, 'VERICTO_TIMEOUT');
+      timeoutMs = fromEnv !== undefined ? Number(fromEnv) * 1000 : 5000;
       if (!Number.isFinite(timeoutMs)) {
         throw new VerictoConfigError(`VERICTO_TIMEOUT must be a number of seconds, got ${JSON.stringify(fromEnv)}.`);
       }

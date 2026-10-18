@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  RuntimeApiEvaluator,
   Vericto,
   VerictoBlockedError,
   VerictoConfigError,
@@ -13,6 +14,8 @@ import {
   type Verdict,
   type VerictoLogger,
 } from '../src/index.js';
+import { unevaluatedVerdict } from '../src/verdict.js';
+import { API_KEY, DATABASE_ID, FakeVericto } from './fake-vericto.js';
 
 /** An in-memory evaluator: the interface an embedded engine would implement. */
 class StubEvaluator implements Evaluator {
@@ -200,5 +203,313 @@ describe('Vericto guard', () => {
       VerictoBlockedError,
     );
     expect(stub.calls.map((c) => c[0])).toEqual(['SELECT 1', 'DROP TABLE t']);
+  });
+
+  it('enforceAll resolves one verdict per statement, in order', async () => {
+    const stub = new StubEvaluator({ B: { decision: 'FLAGGED', rule_code: 'VERICTO-030' } });
+    const verdicts = await guard(stub).enforceAll(['A', 'B', 'C'], 'pg');
+    expect(verdicts.map((v) => [v.sql, v.decision, v.dialect])).toEqual([
+      ['A', 'ALLOWED', 'postgres'],
+      ['B', 'FLAGGED', 'postgres'],
+      ['C', 'ALLOWED', 'postgres'],
+    ]);
+    expect(await guard(stub).enforceAll([], 'postgres')).toEqual([]);
+  });
+
+  it('check() resolves a block instead of rejecting, and applies no fail mode', async () => {
+    const stub = new StubEvaluator({ 'DROP TABLE t': { decision: 'BLOCKED', rule_code: 'VERICTO-001' } });
+    const g = guard(stub, { failMode: 'open' });
+    expect((await g.check('DROP TABLE t', 'postgres')).decision).toBe('BLOCKED');
+    const down = guard(new StubEvaluator({}, new VerictoUnavailableError('down')), { failMode: 'open' });
+    await expect(down.check('SELECT 1', 'postgres')).rejects.toBeInstanceOf(VerictoUnavailableError);
+  });
+
+  it('sends empty and multi-statement SQL as written, in one evaluation', async () => {
+    const stub = new StubEvaluator({ 'INSERT INTO t VALUES (1); DROP TABLE t;': { decision: 'BLOCKED' } });
+    const g = guard(stub);
+    expect(await g.prepare('', 'postgres')).toBe('');
+    await expect(g.enforce('INSERT INTO t VALUES (1); DROP TABLE t;', 'postgres')).rejects.toBeInstanceOf(
+      VerictoBlockedError,
+    );
+    expect(stub.calls).toEqual([
+      ['', 'postgres'],
+      ['INSERT INTO t VALUES (1); DROP TABLE t;', 'postgres'],
+    ]);
+  });
+
+  it('names the evaluator in a dialect error even without an API URL', async () => {
+    const evaluator: Evaluator = {
+      evaluate: () => Promise.reject(new Error('not reached')),
+      supportedDialects: () => Promise.resolve(['postgres']),
+    };
+    await expect(guard(evaluator).requireDialect('snowflake')).rejects.toThrow(/the configured evaluator/);
+    expect(await guard(evaluator).requireDialect(' PG ')).toBe('postgres');
+  });
+});
+
+describe('Vericto guard: fail mode', () => {
+  it('logs and rethrows when closed', async () => {
+    const logger = recorder();
+    const g = guard(new StubEvaluator({}, new VerictoUnavailableError('HTTP 503 from x')), { logger });
+    await expect(g.enforce('SELECT secret FROM t', 'postgres')).rejects.toThrow('HTTP 503 from x');
+    expect(logger.lines).toEqual([
+      'error vericto: no verdict, statement not executed (failMode=closed): HTTP 503 from x',
+    ]);
+  });
+
+  it('open still rejects a block: fail open is only for "no verdict"', async () => {
+    const stub = new StubEvaluator({ 'DROP TABLE t': { decision: 'BLOCKED' } });
+    await expect(guard(stub, { failMode: 'open' }).enforce('DROP TABLE t', 'postgres')).rejects.toBeInstanceOf(
+      VerictoBlockedError,
+    );
+  });
+
+  it('open logs a warning (without the SQL) and resolves an UNEVALUATED verdict with the normalized dialect', async () => {
+    const emit = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
+    try {
+      const logger = recorder();
+      const g = guard(new StubEvaluator({}, new VerictoUnavailableError('Timeout')), { failMode: 'open', logger });
+      const verdict = await g.enforce('SELECT secret FROM t', 'PostgreSQL');
+      expect(verdict).toMatchObject({ decision: 'UNEVALUATED', dialect: 'postgres', message: 'Timeout' });
+      expect(await g.prepare('SELECT secret FROM t', 'postgres')).toBe('SELECT secret FROM t');
+      expect(logger.lines[0]).toBe('warn vericto: no verdict, statement executed unevaluated (failMode=open): Timeout');
+      expect(logger.lines.join('\n')).not.toContain('secret');
+      expect(emit).toHaveBeenCalledWith(expect.stringContaining('Timeout'), {
+        type: 'VerictoFailOpenWarning',
+        code: 'VERICTO_FAIL_OPEN',
+      });
+    } finally {
+      emit.mockRestore();
+    }
+  });
+
+  it('open never swallows a non-Vericto error from the evaluator', async () => {
+    const g = guard(new StubEvaluator({}, new RangeError('bug')), { failMode: 'open' });
+    await expect(g.enforce('SELECT 1', 'postgres')).rejects.toBeInstanceOf(RangeError);
+  });
+
+  it('the option beats the environment; the value is trimmed and case-insensitive', () => {
+    const stub = new StubEvaluator();
+    expect(new Vericto({ evaluator: stub, env: { VERICTO_FAIL_MODE: ' OPEN ' } }).failMode).toBe('open');
+    expect(new Vericto({ evaluator: stub, env: { VERICTO_FAIL_MODE: 'open' }, failMode: 'closed' }).failMode).toBe('closed');
+    expect(() => new Vericto({ evaluator: stub, env: { VERICTO_FAIL_MODE: 'yes' } })).toThrow(/'closed' or 'open'/);
+  });
+
+  // `VERICTO_FAIL_MODE=` or a CI variable that expands to nothing is unset, as for every
+  // other VERICTO_* variable: the documented default, closed. It used to throw.
+  it.each(['', ' ', '\t', ' \n '])('an empty or whitespace-only VERICTO_FAIL_MODE (%j) means closed', (value) => {
+    expect(new Vericto({ evaluator: new StubEvaluator(), env: { VERICTO_FAIL_MODE: value } }).failMode).toBe('closed');
+  });
+
+  it('an empty VERICTO_FAIL_MODE does not override the option', () => {
+    const g = new Vericto({ evaluator: new StubEvaluator(), env: { VERICTO_FAIL_MODE: '' }, failMode: 'open' });
+    expect(g.failMode).toBe('open');
+  });
+
+  it.each(['yes', 'opened', 'fail-open', '0', ' close '])('an invalid VERICTO_FAIL_MODE (%j) still throws', (value) => {
+    const make = () => new Vericto({ evaluator: new StubEvaluator(), env: { VERICTO_FAIL_MODE: value } });
+    expect(make).toThrow(VerictoConfigError);
+    expect(make).toThrow(/^VERICTO_FAIL_MODE must be 'closed' or 'open'/);
+  });
+
+  it('an invalid failMode option is reported as the option', () => {
+    const make = () => new Vericto({ evaluator: new StubEvaluator(), env: { VERICTO_FAIL_MODE: 'open' }, failMode: '' as 'open' });
+    expect(make).toThrow(/^failMode must be 'closed' or 'open', got ""/);
+  });
+
+  it('an empty VERICTO_FAIL_MODE in process.env means closed', () => {
+    vi.stubEnv('VERICTO_FAIL_MODE', '');
+    try {
+      expect(new Vericto({ evaluator: new StubEvaluator() }).failMode).toBe('closed');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe('Vericto guard: logging', () => {
+  const cases: [string, Record<string, unknown>, string[]][] = [
+    ['ALLOWED', { decision: 'ALLOWED' }, []],
+    [
+      'BLOCKED',
+      { decision: 'BLOCKED', rule_code: 'VERICTO-001', severity: 'critical', event_id: 'e1' },
+      ['warn vericto: statement BLOCKED rule=VERICTO-001 severity=critical event_id=e1'],
+    ],
+    ['FLAGGED', { decision: 'FLAGGED' }, ['warn vericto: statement FLAGGED rule=- severity=- event_id=-']],
+    [
+      'PARSE_ERROR',
+      { decision: 'PARSE_ERROR' },
+      ['warn vericto: statement not parsed, allowed by workspace policy rule=- severity=- event_id=-'],
+    ],
+    ['MONITORED', { decision: 'MONITORED', rule_code: 'VERICTO-050' }, ['info vericto: statement MONITORED rule=VERICTO-050 severity=- event_id=-']],
+    [
+      'a masked rewrite',
+      { decision: 'ALLOWED', rewritten_query: 'SELECT mask(email) FROM users' },
+      ['info vericto: running the masked rewrite rule=- severity=- event_id=-'],
+    ],
+  ];
+
+  it.each(cases)('logs %s without the SQL', async (_name, body, expected) => {
+    const logger = recorder();
+    const sql = "SELECT email FROM users WHERE email = 'ana@example.com'";
+    await guard(new StubEvaluator({ [sql]: body }), { logger })
+      .enforce(sql, 'postgres')
+      .catch(() => undefined);
+    expect(logger.lines).toEqual(expected);
+  });
+
+  it('defaults to console for warnings and errors', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const stub = new StubEvaluator({ F: { decision: 'FLAGGED' } });
+      await new Vericto({ evaluator: stub, env: {} }).enforce('F', 'postgres');
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('FLAGGED'));
+      const down = new Vericto({ evaluator: new StubEvaluator({}, new VerictoUnavailableError('down')), env: {} });
+      await down.enforce('A', 'postgres').catch(() => undefined);
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('failMode=closed'));
+    } finally {
+      warn.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  it('reports a broken onVerdict callback to the logger', async () => {
+    const logger = recorder();
+    const g = guard(new StubEvaluator(), {
+      logger,
+      onVerdict: () => {
+        throw 'not an Error'; // eslint-disable-line @typescript-eslint/only-throw-error
+      },
+    });
+    expect((await g.enforce('SELECT 1', 'postgres')).decision).toBe('ALLOWED');
+    expect(logger.lines).toEqual(['error vericto: onVerdict callback threw: not an Error']);
+  });
+});
+
+describe('Vericto guard: verdict cache', () => {
+  it('validates its options', () => {
+    const stub = new StubEvaluator();
+    expect(() => guard(stub, { cacheTtlMs: -1 })).toThrow(/cacheTtlMs/);
+    expect(() => guard(stub, { cacheTtlMs: 1000, cacheSize: 0 })).toThrow(/cacheSize/);
+  });
+
+  it('keys by dialect and SQL', async () => {
+    const stub = new StubEvaluator();
+    const g = guard(stub, { cacheTtlMs: 60_000 });
+    await g.enforce('SELECT 1', 'postgres');
+    await g.enforce('SELECT 1', 'snowflake');
+    await g.enforce('SELECT 1', 'pg'); // same dialect as the first, after normalization
+    await g.enforce('SELECT 2', 'postgres');
+    expect(stub.calls).toEqual([
+      ['SELECT 1', 'postgres'],
+      ['SELECT 1', 'snowflake'],
+      ['SELECT 2', 'postgres'],
+    ]);
+  });
+
+  it('a cached block still rejects, without a new evaluation', async () => {
+    const stub = new StubEvaluator({ 'DROP TABLE t': { decision: 'BLOCKED', rule_code: 'VERICTO-001' } });
+    const g = guard(stub, { cacheTtlMs: 60_000 });
+    await expect(g.enforce('DROP TABLE t', 'postgres')).rejects.toBeInstanceOf(VerictoBlockedError);
+    const err = (await g.enforce('DROP TABLE t', 'postgres').catch((e: unknown) => e)) as VerictoBlockedError;
+    expect(err.verdict.cached).toBe(true);
+    expect(stub.calls).toHaveLength(1);
+  });
+
+  it('evicts the least recently used entry beyond cacheSize', async () => {
+    const stub = new StubEvaluator();
+    const g = guard(stub, { cacheTtlMs: 60_000, cacheSize: 2 });
+    await g.enforce('A', 'postgres');
+    await g.enforce('B', 'postgres');
+    await g.enforce('A', 'postgres'); // hit: A becomes the most recent
+    await g.enforce('C', 'postgres'); // evicts B
+    await g.enforce('A', 'postgres'); // still cached
+    await g.enforce('B', 'postgres'); // evaluated again
+    expect(stub.calls.map((c) => c[0])).toEqual(['A', 'B', 'C', 'B']);
+  });
+
+  it('clearCache forgets every verdict', async () => {
+    const stub = new StubEvaluator();
+    const g = guard(stub, { cacheTtlMs: 60_000 });
+    await g.enforce('A', 'postgres');
+    g.clearCache();
+    await g.enforce('A', 'postgres');
+    expect(stub.calls).toHaveLength(2);
+    guard(stub).clearCache(); // no cache: a no-op
+  });
+
+  it('never caches an UNEVALUATED verdict', async () => {
+    let calls = 0;
+    const evaluator: Evaluator = {
+      evaluate: (sql, dialect) => {
+        calls++;
+        return Promise.resolve(unevaluatedVerdict(sql, dialect, 'embedded engine not loaded'));
+      },
+      supportedDialects: () => Promise.resolve(undefined),
+    };
+    const g = guard(evaluator, { cacheTtlMs: 60_000 });
+    await g.enforce('A', 'postgres');
+    expect((await g.enforce('A', 'postgres')).cached).toBe(false);
+    expect(calls).toBe(2);
+  });
+});
+
+describe('Vericto guard against the Runtime API stand-in', () => {
+  let fake: FakeVericto;
+  beforeEach(async () => {
+    fake = await new FakeVericto().start();
+  });
+  afterEach(async () => {
+    await fake.stop();
+  });
+
+  it('builds its evaluator from the VERICTO_* environment', async () => {
+    const g = new Vericto({
+      logger: false,
+      backoffMs: 0,
+      env: { VERICTO_API_KEY: API_KEY, VERICTO_DATABASE_ID: DATABASE_ID, VERICTO_API_URL: fake.url },
+    });
+    expect(g.evaluator).toBeInstanceOf(RuntimeApiEvaluator);
+    expect((await g.enforce('SELECT 1', 'postgres')).eventId).toBe('evt-allowed');
+    expect(fake.requests[0]?.headers['x-api-key']).toBe(API_KEY);
+  });
+
+  it('refuses to start without configuration', () => {
+    expect(() => new Vericto({ env: {} })).toThrow(VerictoConfigError);
+    expect(() => new Vericto({ env: { VERICTO_API_KEY: API_KEY } })).toThrow(/VERICTO_DATABASE_ID/);
+  });
+
+  it('fails open end to end when the server is down', async () => {
+    const emit = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
+    try {
+      const g = fake.guard({ failMode: 'open' });
+      await fake.stop();
+      const verdict = await g.enforce('SELECT 1', 'postgres');
+      expect(verdict.decision).toBe('UNEVALUATED');
+      expect(verdict.message).toMatch(/after 3 attempt/);
+    } finally {
+      emit.mockRestore();
+      await fake.start();
+    }
+  });
+
+  it('a revoked key is never failed open', async () => {
+    fake.queue.push({ status: 401, body: { error: { code: 'UNAUTHORIZED' } } });
+    await expect(fake.guard({ failMode: 'open' }).enforce('SELECT 1', 'postgres')).rejects.toBeInstanceOf(
+      VerictoConfigError,
+    );
+  });
+
+  it('a quota error follows the fail mode', async () => {
+    const emit = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
+    try {
+      const quota = { status: 429, body: { error: { code: 'QUOTA_EXCEEDED' } } };
+      fake.queue.push(quota, quota);
+      await expect(fake.guard().enforce('SELECT 1', 'postgres')).rejects.toBeInstanceOf(VerictoQuotaExceededError);
+      expect((await fake.guard({ failMode: 'open' }).enforce('SELECT 1', 'postgres')).decision).toBe('UNEVALUATED');
+    } finally {
+      emit.mockRestore();
+    }
   });
 });

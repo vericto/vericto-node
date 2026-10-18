@@ -53,6 +53,9 @@ Create an API key with the **`proxy:evaluate`** scope in the Vericto dashboard
 | `VERICTO_FAIL_MODE` | `failMode` | `closed` or `open` (see [Fail mode](#fail-mode)) | `closed` |
 | `VERICTO_TIMEOUT` | `timeoutMs` | Per-attempt timeout (env in seconds, option in ms) | 5 s |
 
+An option beats its variable. An empty or whitespace-only variable counts as
+unset, so it gets the default; an invalid value throws `VerictoConfigError`.
+
 The key is sent only in the `X-API-Key` header, only over HTTPS (plain HTTP is
 accepted for localhost alone), and never appears in messages, `toString()` or
 `JSON.stringify()`. To trust an extra CA, use Node's `NODE_EXTRA_CA_CERTS`.
@@ -288,6 +291,8 @@ npm ci
 npm run lint && npm run typecheck
 npm test            # vitest: local Runtime API stand-in, real better-sqlite3, fake snowflake-sdk,
                     # real LangChain.js + TypeORM with a scripted LLM (no model calls)
+npm run test:coverage  # the same suite with V8 coverage of src/ (what CI runs); fails under 80%
+                       # lines, statements, functions or branches. Live tests are excluded.
 npm run build       # tsup → dist/ (ESM + CJS + .d.ts)
 npm run smoke       # the built package, ESM and CJS, on any Node >= 18
 ```
