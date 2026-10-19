@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Vericto S.A.S.
+// SPDX-License-Identifier: Apache-2.0
+
 // Smoke test of the BUILT package (dist/), ESM and CJS, on any Node >= 18, with no
 // dev dependencies: a local stand-in API, one allowed and one blocked statement
 // through the snowflake entry point, and the error class identity across entries.

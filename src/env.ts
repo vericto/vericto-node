@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Vericto S.A.S.
+// SPDX-License-Identifier: Apache-2.0
+
 /** The environment the SDK reads its `VERICTO_*` defaults from. */
 export type Env = Record<string, string | undefined>;
 

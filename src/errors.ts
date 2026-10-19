@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Vericto S.A.S.
+// SPDX-License-Identifier: Apache-2.0
+
 import type { Finding, Verdict } from './verdict.js';
 
 /** Base class of every error this package throws. */

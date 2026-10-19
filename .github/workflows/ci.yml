@@ -97,7 +97,7 @@ jobs:
           npm pack --dry-run --json > "$RUNNER_TEMP/pack.json"
           node -e '
             const files = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))[0].files.map((f) => f.path);
-            const bad = files.filter((p) => !/^(dist\/|README\.md$|CHANGELOG\.md$|SECURITY\.md$|LICENSE$|package\.json$)/.test(p));
+            const bad = files.filter((p) => !/^(dist\/|README\.md$|CHANGELOG\.md$|SECURITY\.md$|LICENSE$|NOTICE$|package\.json$)/.test(p));
             console.log(files.join("\n"));
             if (bad.length) { console.error("unexpected files:", bad); process.exit(1); }
           ' "$RUNNER_TEMP/pack.json"

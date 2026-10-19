@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Vericto S.A.S.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * A LangChain.js SQL agent whose queries are checked by Vericto.
  *

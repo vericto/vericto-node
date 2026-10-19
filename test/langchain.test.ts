@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Vericto S.A.S.
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * LangChain.js (@langchain/classic) end to end: a real TypeORM DataSource on
  * better-sqlite3, the real SqlDatabase / QuerySqlTool / SqlToolkit / createSqlAgent /
