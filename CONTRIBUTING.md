@@ -62,7 +62,14 @@ under `test/live/` are opt-in and never run in CI (see the README,
    npm run test:coverage
    npm run build
    npm run smoke
+   npm run docs:check   # README + LangChain.js guide examples against the local stub
    ```
+   If you change a framework guide in `docs/frameworks/`, also run its examples
+   (`cd docs/frameworks && npm ci`, then `node scripts/check-docs-examples.mjs
+   frameworks` from the root with `DATABASE_URL` and `MYSQL_URL` set; CI's `docs` job
+   does this with PostgreSQL and MySQL service containers). A new ```` ```ts ```` block in
+   the README or a guide is run too: give it an expected output, or a
+   `<!-- docs-check: skip <reason> -->` marker if it cannot run offline.
    CI also checks that `npm pack` publishes only `dist/`, `README.md`,
    `CHANGELOG.md`, `SECURITY.md`, `LICENSE`, `NOTICE` and `package.json`; if you change
    `files` in `package.json`, run `npm pack --dry-run` and check the list.

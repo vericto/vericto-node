@@ -17,6 +17,7 @@
  */
 import { Vericto } from './guard.js';
 
+/** The Vericto dialect this wrapper evaluates statements as. */
 export const DIALECT = 'snowflake';
 
 type Callback = (err: unknown, statement: unknown, rows?: unknown[]) => void;
@@ -34,9 +35,11 @@ export interface GuardOptions {
   vericto?: Vericto;
 }
 
+/** A snowflake-sdk connection whose SQL is checked by Vericto first. Build it with {@link guardConnection}. */
 export class GuardedSnowflakeConnection<C extends SnowflakeConnectionLike> {
   /** The underlying connection. SQL run through it directly is **not** checked. */
   readonly raw: C;
+  /** The guard every statement is checked with. */
   readonly vericto: Vericto;
 
   constructor(connection: C, vericto: Vericto) {
@@ -76,7 +79,10 @@ export class GuardedSnowflakeConnection<C extends SnowflakeConnectionLike> {
   }
 }
 
-/** Guard a snowflake-sdk connection (connected or not). */
+/**
+ * Guard a snowflake-sdk connection (connected or not). Rejects with
+ * `VerictoUnsupportedDialectError` when the server does not list `snowflake`.
+ */
 export async function guardConnection<C extends SnowflakeConnectionLike>(
   connection: C,
   options: GuardOptions = {},

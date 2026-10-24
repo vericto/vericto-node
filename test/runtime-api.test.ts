@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { readFileSync } from 'node:fs';
+import { createServer as createHttpServer } from 'node:http';
 import { createServer } from 'node:net';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -113,6 +114,25 @@ describe('RuntimeApiEvaluator', () => {
     const ev = fake.evaluator({ timeoutMs: 150, maxRetries: 0 });
     await expect(ev.evaluate('SELECT 1', 'postgres')).rejects.toThrow(/Timeout/);
     expect(Date.now() - started).toBeLessThan(550);
+  });
+
+  it('times out when the server sends its headers and stalls the body', async () => {
+    // 0.3.0 cleared the timer once the headers arrived, so this never settled.
+    const stalled = createHttpServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.write('{"decision":');
+    });
+    await new Promise<void>((resolve) => { stalled.listen(0, '127.0.0.1', () => { resolve(); }); });
+    const { port } = stalled.address() as { port: number };
+    try {
+      const started = Date.now();
+      const ev = fake.evaluator({ apiUrl: `http://127.0.0.1:${port}`, timeoutMs: 150, maxRetries: 1, backoffMs: 1 });
+      await expect(ev.evaluate('SELECT 1', 'postgres')).rejects.toThrow(/after 2 attempt\(s\): Timeout/);
+      expect(Date.now() - started).toBeLessThan(1500);
+    } finally {
+      stalled.closeAllConnections();
+      await new Promise<void>((resolve) => { stalled.close(() => { resolve(); }); });
+    }
   });
 
   it('treats a body without a decision as unavailable', async () => {

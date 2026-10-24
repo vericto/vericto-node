@@ -156,8 +156,11 @@ function checkOnBlock(onBlock: OnBlock | undefined): OnBlock {
  * `SqlDatabaseChain`.
  */
 export class VerictoSqlDatabase extends SqlDatabase {
+  /** The guard every query is checked with. */
   readonly vericto: Vericto;
+  /** The Vericto dialect the queries are evaluated as. */
   readonly dialect: string;
+  /** What a blocked query does: `return` a message for the model, or `raise`. */
   readonly onBlock: OnBlock;
   /** The unguarded data source: SQL run through it directly is not checked. */
   readonly rawDataSource: DataSource;
@@ -250,6 +253,8 @@ export interface VerictoCheckSqlToolOptions extends VerictoLangChainOptions {
  * A tool that only checks a query (nothing is executed) and answers with Vericto's
  * verdict, so an agent can validate SQL before it proposes or runs it. Each check is
  * a Runtime API evaluation (it counts against the runtime quota and is audited).
+ * It uses `Vericto.check`, which does not apply the fail mode: when Vericto cannot
+ * answer it throws `VerictoUnavailableError`, also under `failMode: 'open'`.
  */
 export class VerictoCheckSqlTool extends Tool {
   static override lc_name(): string {

@@ -19,6 +19,7 @@
 import { Vericto } from './guard.js';
 import { sqlToExecute, type Verdict } from './verdict.js';
 
+/** The Vericto dialect this wrapper evaluates statements as. */
 export const DIALECT = 'sqlite';
 
 /** The part of a better-sqlite3 `Database` this wrapper uses. */
@@ -35,9 +36,11 @@ export interface GuardOptions {
   vericto?: Vericto;
 }
 
+/** A better-sqlite3 database whose SQL is checked by Vericto first. Build it with {@link guardDatabase}. */
 export class GuardedDatabase<D extends SqliteDatabaseLike> {
   /** The underlying database. SQL run through it directly is **not** checked. */
   readonly raw: D;
+  /** The guard every statement is checked with. */
   readonly vericto: Vericto;
 
   constructor(db: D, vericto: Vericto) {

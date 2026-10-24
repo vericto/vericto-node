@@ -6,6 +6,49 @@ All notable changes to this package are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-23
+
+Documentation release, with one fail-closed fix.
+
+### Fixed
+
+- **A stalled response body no longer hangs an evaluation.** `timeoutMs` stopped
+  applying once the response headers arrived, so a server (or a proxy in between)
+  that sent its headers and then never finished the body left `evaluate()`, and the
+  statement waiting on it, pending forever instead of failing closed. The timeout now
+  covers the whole exchange, body included: such a response is a timeout, retried
+  like any other and then `VerictoUnavailableError` (or, under `failMode: 'open'`, an
+  `UNEVALUATED` run). New test in `test/runtime-api.test.ts`.
+
+### Documentation
+
+- README rewritten around the real public API: the `Vericto` methods and every
+  option (`maxRetries`, `backoffMs`, `dialectsTtlMs`, `logger`, `evaluator`, `fetch`,
+  `env` were undocumented), the `Verdict` fields, the helpers, what `check()` does
+  under fail-open, timeouts and retries with the worst-case wait, the errors and their
+  fields, `prepareWithVerdict` and `query()` on the driver wrappers, and that the API
+  is asynchronous only. The Quickstart no longer uses undefined variables.
+- **Framework guides** in `docs/frameworks/`, each with a tested example and the
+  versions it was tested with: LangChain.js (the official integration) and documented
+  patterns for the Vercel AI SDK, Mastra, the OpenAI Agents SDK, Prisma ORM (a
+  driver-adapter wrapper that also checks model queries), Drizzle ORM, Knex,
+  node-postgres and mysql2. None of the patterns is a package integration.
+- JSDoc on the public API that lacked it (`Verdict` and `Finding` fields, `isMasked`,
+  `RuntimeApiEvaluator.evaluate`, the path constants, the wrapper classes).
+- The Spanish summary in the README covers the frameworks and the timeout.
+
+### Changed
+
+- CI runs the README and guide examples: `npm run docs:check` (README and
+  LangChain.js guide) in the `check` job, and a new `docs` job for the other guides,
+  with the framework versions pinned in `docs/frameworks/package.json` and PostgreSQL
+  17 and MySQL 8.4 service containers. `scripts/docs-stub.mjs` is the local stand-in
+  for the Runtime API they run against; `scripts/check-docs-examples.mjs` extracts,
+  type-checks and runs the blocks. Neither is published.
+- Dev dependencies (not published): `@langchain/classic` 1.0.55, `@langchain/core`
+  1.3.0, `eslint` 10.13.0, `typescript-eslint` 8.72.0, `vitest` and
+  `@vitest/coverage-v8` 5.0.5.
+
 ## [0.3.0] - 2026-10-18
 
 **Now open source under the Apache License 2.0.** From this version on,
@@ -136,6 +179,7 @@ the Vericto Runtime API (`POST /api/v1/proxy/query`).
   `guardDatabase()` rejects with `VerictoUnsupportedDialectError` until the server
   lists it.
 
+[0.3.1]: https://github.com/vericto/vericto-node/releases/tag/v0.3.1
 [0.2.2]: https://github.com/vericto/vericto-node/releases/tag/v0.2.2
 [0.2.1]: https://github.com/vericto/vericto-node/releases/tag/v0.2.1
 [0.2.0]: https://github.com/vericto/vericto-node/releases/tag/v0.2.0

@@ -52,10 +52,17 @@ const SILENT: VerictoLogger = { info: () => {}, warn: () => {}, error: () => {} 
  * Checks SQL with Vericto before it runs. Share one instance per process; the
  * wrappers call `enforce` for every statement, and you can call it yourself around
  * any other driver.
+ *
+ * Every check is a network call, so every method that checks SQL is asynchronous;
+ * there is no synchronous variant. The constructor throws `VerictoConfigError` for a
+ * missing or malformed key, database id, URL, timeout or fail mode.
  */
 export class Vericto {
+  /** What evaluates statements (a {@link RuntimeApiEvaluator} unless `options.evaluator`). */
   readonly evaluator: Evaluator;
+  /** `closed` or `open`: what happens when Vericto cannot answer. */
   readonly failMode: FailMode;
+  /** Called with every verdict (`options.onVerdict`). */
   readonly onVerdict: ((verdict: Verdict) => void) | undefined;
   readonly #logger: VerictoLogger;
   readonly #cache: VerdictCache | undefined;
@@ -94,6 +101,8 @@ export class Vericto {
   /**
    * Evaluate `sql` and resolve the verdict, whatever it is. Does not apply the fail
    * mode and does not reject on `BLOCKED`: use it to ask, and `enforce` to guard.
+   * Rejects with `VerictoUnavailableError` (even under `failMode: 'open'`) or
+   * `VerictoConfigError`.
    */
   async check(sql: string, dialect: string): Promise<Verdict> {
     if (typeof sql !== 'string') {
@@ -146,6 +155,7 @@ export class Vericto {
     return out;
   }
 
+  /** Drop every cached verdict (only relevant with `cacheTtlMs` > 0). */
   clearCache(): void {
     this.#cache?.clear();
   }
