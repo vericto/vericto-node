@@ -25,6 +25,14 @@ export {
 export type { Evaluator } from './evaluator.js';
 export { Vericto, type FailMode, type VerictoLogger, type VerictoOptions } from './guard.js';
 export {
+  MAX_CONTEXT_VALUE,
+  MAX_END_USER_KEYS,
+  MAX_END_USER_VALUE,
+  type EndUser,
+  type EvaluationOptions,
+  type PolicyContext,
+} from './policy-context.js';
+export {
   CONFIG_PATH,
   DEFAULT_API_URL,
   EVALUATE_PATH,

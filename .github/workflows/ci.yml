@@ -47,6 +47,9 @@ jobs:
       # test/langchain.test.ts (pinned @langchain/classic, @langchain/core, typeorm).
       - run: npm run test:coverage
       - run: npm run build
+      # The README's and the LangChain.js guide's TypeScript examples, type-checked and
+      # run against a local Runtime API stand-in (scripts/docs-stub.mjs): no key, no network.
+      - run: npm run docs:check
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: matrix.node == '24'
         with:
@@ -77,6 +80,52 @@ jobs:
           name: dist
           path: dist/
       - run: node scripts/smoke.mjs
+
+  docs:
+    # The framework guides (docs/frameworks/*.md): each TypeScript example is
+    # type-checked and run against the Runtime API stand-in, with the framework
+    # versions pinned in docs/frameworks/package.json and real PostgreSQL and MySQL.
+    name: Framework guide examples
+    needs: check
+    runs-on: ${{ github.event.repository.private && fromJSON(vars.CI_RUNS_ON || '["self-hosted","linux","x64","vericto-spot"]') || fromJSON(vars.CI_RUNS_ON_PUBLIC || '"ubuntu-latest"') }}
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: docs
+          POSTGRES_DB: app
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: docs
+          MYSQL_DATABASE: app
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pdocs" --health-interval 5s --health-timeout 5s --health-retries 30
+    env:
+      # Throwaway service containers of this job; not secrets.
+      DATABASE_URL: postgres://postgres:docs@127.0.0.1:5432/app
+      MYSQL_URL: mysql://root:docs@127.0.0.1:3306/app
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            docs/frameworks/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm ci
+        working-directory: docs/frameworks
+      - run: node scripts/check-docs-examples.mjs frameworks
 
   pack:
     name: Package contents

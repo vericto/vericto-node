@@ -20,8 +20,15 @@
  * `getTableInfo`, and `SqlDatabaseChain`'s generated SQL. A blocked query is
  * answered with a message the model can act on (rule, reason, suggested fix)
  * instead of an exception, unless `onBlock: 'raise'`. Masked queries run as the
- * rewrite. Vericto being unavailable or misconfigured is never turned into a message
- * for the model: it propagates, so the fail mode stays in charge.
+ * rewrite. When Vericto cannot answer, the guard's fail mode applies: `closed` (the
+ * default) rejects with `VerictoUnavailableError`, which is never turned into a
+ * message for the model; `open` runs the query unevaluated, and `VerictoCheckSqlTool`
+ * answers `UNEVALUATED` with the reason. A configuration error rejects in both modes.
+ *
+ * `context` (`{ ticket, tenant }`) and `endUser` go with every evaluation: a fixed
+ * value, or a function read for each statement (for example from an
+ * `AsyncLocalStorage` set per request). They take effect when business policies are
+ * enabled in your workspace.
  *
  * Requires the optional peers `@langchain/classic`, `@langchain/core` and `typeorm`.
  */
@@ -35,6 +42,7 @@ import type { DataSource } from 'typeorm';
 import { normalizeDialect } from './dialects.js';
 import { VerictoBlockedError, VerictoConfigError, VerictoError } from './errors.js';
 import { Vericto } from './guard.js';
+import { policyFields, resolveSource, type EndUser, type PolicyContext, type Source } from './policy-context.js';
 import { isMasked, sqlToExecute, type Verdict } from './verdict.js';
 
 /** What a blocked query does: `return` a message for the model (default), or `raise`. */
@@ -47,6 +55,28 @@ export interface VerictoLangChainOptions {
   dialect?: string;
   /** Default `return`. */
   onBlock?: OnBlock;
+  /** `context` sent with every evaluation (`{ ticket, tenant }`), or a function read per statement. */
+  context?: Source<PolicyContext>;
+  /** `end_user` sent with every evaluation, or a function read per statement. */
+  endUser?: Source<EndUser>;
+}
+
+/** Where the declared context of a wrapper comes from. */
+export interface PolicySources {
+  context?: Source<PolicyContext> | undefined;
+  endUser?: Source<EndUser> | undefined;
+}
+
+/** Validate fixed values at construction; functions are checked for every statement. */
+function checkSources(sources: PolicySources): void {
+  policyFields({
+    context: typeof sources.context === 'function' ? undefined : sources.context,
+    endUser: typeof sources.endUser === 'function' ? undefined : sources.endUser,
+  });
+}
+
+function resolveSources(sources: PolicySources): { context?: PolicyContext; endUser?: EndUser } {
+  return { context: resolveSource(sources.context), endUser: resolveSource(sources.endUser) };
 }
 
 export type VerictoSqlDatabaseParams = SqlDatabaseDataSourceParams & VerictoLangChainOptions;
@@ -83,12 +113,19 @@ export function dialectFromDataSource(dataSource: Pick<DataSource, 'options'>): 
 
 /**
  * A `DataSource` whose `query()` is checked by Vericto first (and runs the masked
- * rewrite). Everything else is the original data source's.
+ * rewrite). Everything else is the original data source's. `sources` (`context`,
+ * `endUser`) go with every evaluation.
  */
-export function guardDataSource(dataSource: DataSource, vericto: Vericto, dialect: string): DataSource {
+export function guardDataSource(
+  dataSource: DataSource,
+  vericto: Vericto,
+  dialect: string,
+  sources: PolicySources = {},
+): DataSource {
   const name = normalizeDialect(dialect);
+  checkSources(sources);
   const query = async (sql: string, parameters?: unknown[], ...rest: unknown[]): Promise<unknown> => {
-    const final = await vericto.prepare(sql, name);
+    const final = await vericto.prepare(sql, name, resolveSources(sources));
     return (dataSource.query as (...args: unknown[]) => Promise<unknown>).call(dataSource, final, parameters, ...rest);
   };
   return new Proxy(dataSource, {
@@ -120,6 +157,9 @@ export function blockedMessage(verdict: Verdict): string {
 /** A readable verdict for the check tool. */
 export function describeVerdict(verdict: Verdict): string {
   if (verdict.decision === 'BLOCKED') return blockedMessage(verdict).replace('; it was NOT executed.', '.');
+  if (verdict.decision === 'UNEVALUATED') {
+    return `Vericto: UNEVALUATED. Vericto could not evaluate the query (${verdict.message ?? 'no verdict'}).`;
+  }
   const rule = verdict.ruleCode ? ` by ${verdict.ruleCode}${verdict.severity ? ` (severity ${verdict.severity})` : ''}` : '';
   let text: string;
   switch (verdict.decision) {
@@ -156,19 +196,28 @@ function checkOnBlock(onBlock: OnBlock | undefined): OnBlock {
  * `SqlDatabaseChain`.
  */
 export class VerictoSqlDatabase extends SqlDatabase {
+  /** The guard every query is checked with. */
   readonly vericto: Vericto;
+  /** The Vericto dialect the queries are evaluated as. */
   readonly dialect: string;
+  /** What a blocked query does: `return` a message for the model, or `raise`. */
   readonly onBlock: OnBlock;
   /** The unguarded data source: SQL run through it directly is not checked. */
   readonly rawDataSource: DataSource;
+  /** `context` sent with every evaluation (a value or a function). */
+  readonly context: Source<PolicyContext> | undefined;
+  /** `end_user` sent with every evaluation (a value or a function). */
+  readonly endUser: Source<EndUser> | undefined;
 
   protected constructor(fields: VerictoSqlDatabaseParams & { vericto: Vericto; dialect: string }) {
     super(fields);
     this.vericto = fields.vericto;
     this.dialect = fields.dialect;
     this.onBlock = checkOnBlock(fields.onBlock);
+    this.context = fields.context;
+    this.endUser = fields.endUser;
     this.rawDataSource = fields.appDataSource;
-    this.appDataSource = guardDataSource(fields.appDataSource, this.vericto, this.dialect);
+    this.appDataSource = guardDataSource(fields.appDataSource, this.vericto, this.dialect, this);
   }
 
   /**
@@ -180,6 +229,7 @@ export class VerictoSqlDatabase extends SqlDatabase {
     const vericto = fields.vericto ?? new Vericto();
     const dialect = await vericto.requireDialect(fields.dialect ?? dialectFromDataSource(fields.appDataSource));
     checkOnBlock(fields.onBlock);
+    checkSources(fields);
     const base = await SqlDatabase.fromDataSourceParams(fields);
     const db = new VerictoSqlDatabase({ ...fields, vericto, dialect });
     db.allTables = base.allTables;
@@ -242,7 +292,7 @@ export class VerictoSqlToolkit extends SqlToolkit {
 }
 
 export interface VerictoCheckSqlToolOptions extends VerictoLangChainOptions {
-  /** Take the guard, dialect and onBlock from this database. */
+  /** Take the guard, dialect, onBlock, context and endUser from this database. */
   db?: VerictoSqlDatabase;
 }
 
@@ -250,6 +300,9 @@ export interface VerictoCheckSqlToolOptions extends VerictoLangChainOptions {
  * A tool that only checks a query (nothing is executed) and answers with Vericto's
  * verdict, so an agent can validate SQL before it proposes or runs it. Each check is
  * a Runtime API evaluation (it counts against the runtime quota and is audited).
+ * It uses `Vericto.check`, so the fail mode applies when Vericto cannot answer:
+ * `closed` rejects with `VerictoUnavailableError` (never turned into text for the
+ * model); `open` answers `UNEVALUATED` with the reason.
  */
 export class VerictoCheckSqlTool extends Tool {
   static override lc_name(): string {
@@ -265,6 +318,10 @@ export class VerictoCheckSqlTool extends Tool {
   readonly vericto: Vericto;
   readonly dialect: string;
   readonly onBlock: OnBlock;
+  /** `context` sent with every check (a value or a function). */
+  readonly context: Source<PolicyContext> | undefined;
+  /** `end_user` sent with every check (a value or a function). */
+  readonly endUser: Source<EndUser> | undefined;
 
   constructor(options: VerictoCheckSqlToolOptions = {}) {
     super();
@@ -274,11 +331,14 @@ export class VerictoCheckSqlTool extends Tool {
     this.vericto = vericto ?? new Vericto();
     this.dialect = normalizeDialect(dialect);
     this.onBlock = checkOnBlock(options.onBlock ?? options.db?.onBlock);
+    this.context = options.context ?? options.db?.context;
+    this.endUser = options.endUser ?? options.db?.endUser;
+    checkSources(this);
   }
 
   /** @ignore */
   async _call(input: string): Promise<string> {
-    const verdict = await this.vericto.check(input, this.dialect);
+    const verdict = await this.vericto.check(input, this.dialect, resolveSources(this));
     if (verdict.decision === 'BLOCKED' && this.onBlock === 'raise') throw new VerictoBlockedError(verdict, input);
     return describeVerdict(verdict);
   }

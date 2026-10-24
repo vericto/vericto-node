@@ -3,3 +3,5 @@ dist/
 coverage/
 *.tgz
 .DS_Store
+.docs-check/
+docs/frameworks/generated/

@@ -11,35 +11,52 @@ const SERVER_DECISIONS: ReadonlySet<string> = new Set(['ALLOWED', 'FLAGGED', 'MO
 
 /** A rule that matched the statement. */
 export interface Finding {
+  /** The rule code, e.g. `VERICTO-001`. */
   readonly ruleCode: string;
+  /** `critical`, `high`, `medium`, `low` or `info`. */
   readonly severity?: string;
+  /** The rule's id in the workspace catalogue. */
   readonly ruleId?: string;
+  /** Where in the statement's syntax tree the rule matched. */
   readonly astNodePath?: string;
+  /** A safer statement Vericto proposes, when it has one. */
   readonly suggestedFix?: string;
 }
 
 /** Vericto's answer for one statement. */
 export interface Verdict {
+  /** What Vericto decided; see {@link Decision}. */
   readonly decision: Decision;
   /** The statement as submitted. */
   readonly sql: string;
+  /** The Vericto dialect it was evaluated as (`postgres`, `mysql`, `oracle`, `mssql`, `snowflake`, `sqlite`). */
   readonly dialect: string;
+  /** The deciding rule, e.g. `VERICTO-001` (blocks and flags), `VERICTO-085` (a mask). */
   readonly ruleCode?: string;
+  /** The deciding rule's severity. */
   readonly severity?: string;
+  /** The server's explanation, when it adds one to the rule code; the fail-open reason for `UNEVALUATED`. */
   readonly message?: string;
+  /** A safer statement Vericto proposes (`suggested_safe_query`), when it has one. */
   readonly suggestedFix?: string;
   /**
    * When set, the statement to run **instead of** `sql`: the sensitive columns it
    * reads come back masked (Sensitive Column Protection).
    */
   readonly rewrittenQuery?: string;
+  /** The parser's message, on `PARSE_ERROR` (and on a parse-error block). */
   readonly parseError?: string;
+  /** The rules that matched (empty when allowed). */
   readonly findings: readonly Finding[];
+  /** The tagged sensitive columns the statement reads, as the server reports them. */
   readonly sensitiveColumns: readonly unknown[];
+  /** What the API key's agent allowlist denied, as the server reports it. */
   readonly accessDenied: readonly unknown[];
   /** The audit-trail event id. */
   readonly eventId?: string;
+  /** The ruleset version, when the server reports one (it drops the verdict cache when it changes). */
   readonly rulesetVersion?: string;
+  /** True when the verdict came from the local cache (`cacheTtlMs`): it was not evaluated again. */
   readonly cached: boolean;
   /** The response body, for fields this version does not model yet. */
   readonly raw: Readonly<Record<string, unknown>>;
@@ -50,11 +67,16 @@ export function sqlToExecute(verdict: Verdict): string {
   return verdict.rewrittenQuery ?? verdict.sql;
 }
 
+/** True when the statement must run as {@link Verdict.rewrittenQuery} (Sensitive Column Protection). */
 export function isMasked(verdict: Verdict): boolean {
   return Boolean(verdict.rewrittenQuery);
 }
 
-/** Build a verdict from a `POST /api/v1/proxy/query` response body. */
+/**
+ * Build a verdict from a `POST /api/v1/proxy/query` response body. An unknown or
+ * missing `decision` is read as `BLOCKED`, never as allowed. Useful for a custom
+ * {@link Evaluator} or a test double.
+ */
 export function verdictFromResponse(body: Record<string, unknown>, sql: string, dialect: string): Verdict {
   const raw = (typeof body.decision === 'string' ? body.decision : '').toUpperCase();
   // An unknown decision must never be read as "allowed".

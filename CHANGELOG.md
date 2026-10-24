@@ -6,6 +6,146 @@ All notable changes to this package are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-23
+
+One fail-open contract for both SDKs (shared with vericto-python 0.5.0), the
+business policy context of the Runtime API, and a better-sqlite3 typing fix.
+
+### Breaking change
+
+- **`check()` follows the fail mode.** Under `failMode: 'open'` (or
+  `VERICTO_FAIL_MODE=open`), when Vericto cannot answer (network error, timeout,
+  HTTP 5xx, a response that is not JSON or has no decision, rate limit after the
+  retries, monthly quota), `Vericto.check()` now resolves an `UNEVALUATED` verdict
+  whose `message` is the reason, and logs a warning, instead of rejecting with
+  `VerictoUnavailableError`. `VerictoCheckSqlTool` (LangChain.js) answers
+  `Vericto: UNEVALUATED. Vericto could not evaluate the query (<reason>).` instead of
+  throwing. vericto-python already answered `UNEVALUATED` from its LangChain check
+  tool; both SDKs now do it from `check()` and every wrapper.
+  Unchanged: under `failMode: 'closed'` (the default) `check()`, `enforce()` and every
+  wrapper reject with `VerictoUnavailableError` (the safest contract: a returned
+  `BLOCKED` would read as a rule decision that never happened); `enforce()` under
+  `'open'` resolves `UNEVALUATED` as before; `VerictoConfigError` (key, scope,
+  dialect, request) rejects in both modes.
+  Migration, for code that caught the error under `'open'`:
+
+  ```ts
+  // 0.3.x
+  try {
+    const verdict = await vericto.check(sql, 'postgres');
+    use(verdict);
+  } catch (err) {
+    if (!(err instanceof VerictoUnavailableError)) throw err;
+    noVerdict(err.message);
+  }
+
+  // 0.4.0 (failMode: 'open')
+  const verdict = await vericto.check(sql, 'postgres');
+  if (verdict.decision === 'UNEVALUATED') noVerdict(verdict.message);
+  else use(verdict);
+  ```
+
+  Code that runs with `failMode: 'closed'` needs no change.
+
+### Added
+
+- **Business policy context** (Runtime API M2): `check`, `enforce`, `prepare` and
+  `enforceAll` take an optional third argument `{ context: { ticket, tenant },
+  endUser }`, sent as `context` and `end_user`; so does `RuntimeApiEvaluator.evaluate`.
+  The values are checked before anything is sent, with the limits of the service
+  (vericto-fmw `policyContextSchema`): `ticket` and `tenant` 1 to 128 characters,
+  `end_user` up to 16 attributes with identifier keys (at most 63 characters) and
+  values of 1 to 256 characters, no control characters, no other `context` key. An
+  invalid value rejects with `VerictoConfigError` in both fail modes; the message
+  names the field, never the value. They take effect when business policies are
+  enabled in the workspace; they carry the API key's trust. The verdict cache keys on
+  them. New exports: the types `PolicyContext`, `EndUser`, `EvaluationOptions`, and
+  the limits `MAX_CONTEXT_VALUE`, `MAX_END_USER_KEYS`, `MAX_END_USER_VALUE`.
+- LangChain.js: `VerictoSqlDatabase.fromDataSourceParams` / `fromOptionsParams`,
+  `VerictoCheckSqlTool` and `guardDataSource` take `context` and `endUser`, as a value
+  or as a function read for every statement (for example from an
+  `AsyncLocalStorage`). Fixed values are validated at construction.
+- `Evaluator.evaluate(sql, dialect, options?)`: the guard passes `options` only when
+  the caller gives `context` or `endUser`, so an existing `evaluate(sql, dialect)`
+  implementation keeps type-checking and working.
+- `scripts/docs-stub.mjs` validates and records `context` and `end_user` like the
+  service; `scripts/docs-stub.d.mts` types it for the tests.
+- Tests: the fail-mode contract over HTTP in both modes for a network error, a
+  timeout, a 5xx and a body that is not JSON (`test/fail-mode-contract.test.ts`);
+  `context` / `end_user` in the request body, the limits, the cache, against the fake
+  server and the docs stub (`test/policy-context.test.ts`); the LangChain.js tools
+  under both fail modes and with the context.
+
+### Fixed
+
+- **better-sqlite3 typing.** `GuardedDatabase<Database>.prepare()` resolved
+  `Statement<unknown[], unknown> | Statement<[{}], unknown>` (inferred from
+  better-sqlite3's generic `prepare`), so `stmt.run()` with no argument, or with more
+  than one, did not compile, `stmt.get(null)` was refused, and a
+  `Statement<[number], Row>` annotation was rejected. `prepare` and
+  `prepareWithVerdict` now take better-sqlite3's type arguments
+  (`prepare<[number], Row>(sql)`) and resolve exactly its `Statement` type
+  (`Statement<unknown[], unknown>` without them); `all<Row>` / `get<Row>` type the
+  rows. Other drivers keep the statement type their own `prepare` returns. Type test:
+  `test/types/better-sqlite3.types.ts` (compiled by `npm run typecheck`, fails on
+  0.3.1).
+- `describeVerdict` (the text of `VerictoCheckSqlTool`) has an `UNEVALUATED` case; it
+  would have described such a verdict as `ALLOWED`.
+
+### Changed
+
+- README: the fail-mode contract for `check()`, `enforce()` and the wrappers, with a
+  0.3.x to 0.4.0 example; a **Business policy context** section; the typed
+  better-sqlite3 `prepare`; `evaluate(sql, dialect, options?)`. LangChain.js guide:
+  the check tool under both fail modes and a `context` / `endUser` example. All
+  examples run in `npm run docs:check` and the framework job.
+- Dependencies: compatible lockfile refresh (rollup 4.65.0, @babel/parser 7.29.11,
+  js-yaml 5.5.0, postcss 8.5.31, among others; the pinned dev dependencies are already
+  the newest of their major). No runtime dependency; peer ranges unchanged.
+
+## [0.3.1] - 2026-10-23
+
+Documentation release, with one fail-closed fix.
+
+### Fixed
+
+- **A stalled response body no longer hangs an evaluation.** `timeoutMs` stopped
+  applying once the response headers arrived, so a server (or a proxy in between)
+  that sent its headers and then never finished the body left `evaluate()`, and the
+  statement waiting on it, pending forever instead of failing closed. The timeout now
+  covers the whole exchange, body included: such a response is a timeout, retried
+  like any other and then `VerictoUnavailableError` (or, under `failMode: 'open'`, an
+  `UNEVALUATED` run). New test in `test/runtime-api.test.ts`.
+
+### Documentation
+
+- README rewritten around the real public API: the `Vericto` methods and every
+  option (`maxRetries`, `backoffMs`, `dialectsTtlMs`, `logger`, `evaluator`, `fetch`,
+  `env` were undocumented), the `Verdict` fields, the helpers, what `check()` does
+  under fail-open, timeouts and retries with the worst-case wait, the errors and their
+  fields, `prepareWithVerdict` and `query()` on the driver wrappers, and that the API
+  is asynchronous only. The Quickstart no longer uses undefined variables.
+- **Framework guides** in `docs/frameworks/`, each with a tested example and the
+  versions it was tested with: LangChain.js (the official integration) and documented
+  patterns for the Vercel AI SDK, Mastra, the OpenAI Agents SDK, Prisma ORM (a
+  driver-adapter wrapper that also checks model queries), Drizzle ORM, Knex,
+  node-postgres and mysql2. None of the patterns is a package integration.
+- JSDoc on the public API that lacked it (`Verdict` and `Finding` fields, `isMasked`,
+  `RuntimeApiEvaluator.evaluate`, the path constants, the wrapper classes).
+- The Spanish summary in the README covers the frameworks and the timeout.
+
+### Changed
+
+- CI runs the README and guide examples: `npm run docs:check` (README and
+  LangChain.js guide) in the `check` job, and a new `docs` job for the other guides,
+  with the framework versions pinned in `docs/frameworks/package.json` and PostgreSQL
+  17 and MySQL 8.4 service containers. `scripts/docs-stub.mjs` is the local stand-in
+  for the Runtime API they run against; `scripts/check-docs-examples.mjs` extracts,
+  type-checks and runs the blocks. Neither is published.
+- Dev dependencies (not published): `@langchain/classic` 1.0.55, `@langchain/core`
+  1.3.0, `eslint` 10.13.0, `typescript-eslint` 8.72.0, `vitest` and
+  `@vitest/coverage-v8` 5.0.5.
+
 ## [0.3.0] - 2026-10-18
 
 **Now open source under the Apache License 2.0.** From this version on,
@@ -136,6 +276,8 @@ the Vericto Runtime API (`POST /api/v1/proxy/query`).
   `guardDatabase()` rejects with `VerictoUnsupportedDialectError` until the server
   lists it.
 
+[0.4.0]: https://github.com/vericto/vericto-node/releases/tag/v0.4.0
+[0.3.1]: https://github.com/vericto/vericto-node/releases/tag/v0.3.1
 [0.2.2]: https://github.com/vericto/vericto-node/releases/tag/v0.2.2
 [0.2.1]: https://github.com/vericto/vericto-node/releases/tag/v0.2.1
 [0.2.0]: https://github.com/vericto/vericto-node/releases/tag/v0.2.0

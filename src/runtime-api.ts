@@ -9,11 +9,15 @@ import {
   VerictoUnsupportedDialectError,
 } from './errors.js';
 import type { Evaluator } from './evaluator.js';
+import { policyFields, type EvaluationOptions } from './policy-context.js';
 import { verdictFromResponse, type Verdict } from './verdict.js';
 import { VERSION } from './version.js';
 
+/** The Vericto API used when neither `apiUrl` nor `VERICTO_API_URL` is set. */
 export const DEFAULT_API_URL = 'https://api.vericto.com';
+/** The Runtime API endpoint every evaluation is sent to. */
 export const EVALUATE_PATH = '/api/v1/proxy/query';
+/** Where the server lists the dialects it evaluates. */
 export const CONFIG_PATH = '/api/v1/meta/config';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -55,9 +59,13 @@ export interface RuntimeApiOptions {
  * extra CA, use Node's `NODE_EXTRA_CA_CERTS`.
  */
 export class RuntimeApiEvaluator implements Evaluator {
+  /** The API base URL, without a trailing slash. */
   readonly apiUrl: string;
+  /** The registered database (lower-case UUID) every evaluation names. */
   readonly databaseId: string;
+  /** Per-attempt timeout in milliseconds. */
   readonly timeoutMs: number;
+  /** Retries after the first attempt. */
   readonly maxRetries: number;
   readonly #apiKey: string;
   readonly #backoffMs: number;
@@ -129,16 +137,27 @@ export class RuntimeApiEvaluator implements Evaluator {
     this.#fetch = f;
   }
 
+  /** A description without the key. */
   toString(): string {
     return `RuntimeApiEvaluator(apiUrl=${this.apiUrl}, databaseId=${this.databaseId})`;
   }
 
+  /** `JSON.stringify` shows the URL and database id, never the key. */
   toJSON(): Record<string, unknown> {
     return { apiUrl: this.apiUrl, databaseId: this.databaseId };
   }
 
-  async evaluate(sql: string, dialect: string): Promise<Verdict> {
-    const payload = JSON.stringify({ query: sql, database_id: this.databaseId, dialect });
+  /**
+   * Evaluate one statement. Resolves the verdict (`BLOCKED` included). Rejects with
+   * `VerictoUnavailableError` when no verdict came back after the retries (network
+   * error, timeout, 5xx, 429 rate limit; `VerictoQuotaExceededError` at once for the
+   * monthly quota) and with `VerictoConfigError` for 400, 401, 403 and other 4xx, or an
+   * invalid `context` / `endUser`. Each attempt, response body included, is bounded by
+   * `timeoutMs`. `options.context` and `options.endUser` are sent as `context` and
+   * `end_user` (see `policy-context`).
+   */
+  async evaluate(sql: string, dialect: string, options?: EvaluationOptions): Promise<Verdict> {
+    const payload = JSON.stringify({ query: sql, database_id: this.databaseId, dialect, ...policyFields(options) });
     let lastError = 'no attempt made';
     let retryAfterMs: number | undefined;
 
@@ -146,7 +165,7 @@ export class RuntimeApiEvaluator implements Evaluator {
       if (attempt > 0) await sleep(this.#delay(attempt, retryAfterMs));
       retryAfterMs = undefined;
 
-      let response: Response;
+      let response: ApiResponse;
       try {
         response = await this.#request(EVALUATE_PATH, {
           method: 'POST',
@@ -158,8 +177,7 @@ export class RuntimeApiEvaluator implements Evaluator {
         continue;
       }
 
-      const status = response.status;
-      const body = await jsonBody(response);
+      const { status, body } = response;
       if (status === 200 || (status === 403 && (typeof body.decision === 'string' ? body.decision : '').toUpperCase() === 'BLOCKED')) {
         if (!('decision' in body)) {
           lastError = `HTTP ${status} without a decision from ${this.apiUrl}`;
@@ -207,7 +225,7 @@ export class RuntimeApiEvaluator implements Evaluator {
     try {
       const response = await this.#request(CONFIG_PATH, { method: 'GET', headers: this.#headers() });
       if (response.status !== 200) return this.#dialects;
-      const listed = (await jsonBody(response)).dialects;
+      const listed = response.body.dialects;
       if (!Array.isArray(listed)) return this.#dialects;
       const ids = listed
         .map((d: unknown) => (d && typeof d === 'object' ? (d as Record<string, unknown>).id : undefined))
@@ -224,11 +242,18 @@ export class RuntimeApiEvaluator implements Evaluator {
     return { Accept: 'application/json', 'User-Agent': `vericto-node/${VERSION}` };
   }
 
-  async #request(path: string, init: RequestInit): Promise<Response> {
+  /**
+   * One HTTP attempt, response body included. The timeout covers the whole exchange:
+   * a server that sends its headers and then stalls the body is a timeout too, not a
+   * request that never settles.
+   */
+  async #request(path: string, init: RequestInit): Promise<ApiResponse> {
     const controller = new AbortController();
     const timer = setTimeout(() => { controller.abort(); }, this.timeoutMs);
     try {
-      return await this.#fetch(this.apiUrl + path, { ...init, redirect: 'manual', signal: controller.signal });
+      const response = await this.#fetch(this.apiUrl + path, { ...init, redirect: 'manual', signal: controller.signal });
+      const text = await response.text();
+      return { status: response.status, headers: response.headers, body: parseJsonObject(text) };
     } finally {
       clearTimeout(timer);
     }
@@ -272,9 +297,14 @@ export class RuntimeApiEvaluator implements Evaluator {
   }
 }
 
-async function jsonBody(response: Response): Promise<Record<string, unknown>> {
+interface ApiResponse {
+  status: number;
+  headers: Headers;
+  body: Record<string, unknown>;
+}
+
+function parseJsonObject(text: string): Record<string, unknown> {
   try {
-    const text = await response.text();
     const parsed: unknown = text ? JSON.parse(text) : {};
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
   } catch {

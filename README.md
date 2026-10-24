@@ -21,18 +21,26 @@ release (see [Evaluators](#evaluators)).
 - TypeScript types, ESM and CommonJS builds, Node.js 18+ (uses the global `fetch`).
 - No runtime dependencies. Drivers and LangChain are optional peer dependencies
   and separate entry points: importing `@vericto/sdk` never loads them.
-
-## Integrations
-
-| Integration | Entry point | Peer dependencies | Status |
-|---|---|---|---|
-| snowflake-sdk | `@vericto/sdk/snowflake` | `snowflake-sdk` >= 1.9 | 0.1.0 |
-| better-sqlite3 | `@vericto/sdk/better-sqlite3` | `better-sqlite3` >= 9 | 0.1.0 (see [SQLite status](#sqlite-status)) |
-| LangChain.js SQL agents, tools and chains | `@vericto/sdk/langchain` | `@langchain/classic` 1.x, `@langchain/core` 1.x, `typeorm` | 0.2.0 |
-| Any other driver | `@vericto/sdk` (`Vericto.enforce` / `prepare`) | none | 0.1.0 |
+- Asynchronous only: a check is a network call, so every API that checks SQL
+  returns a promise. There is no synchronous variant.
 
 Python (snowflake-connector-python, sqlite3, SQLAlchemy, LangChain, LlamaIndex,
 dbt and Airflow) lives in [vericto-python](https://github.com/vericto/vericto-python).
+
+## Contents
+
+- [Install](#install) · [Configure](#configure) · [Quickstart](#quickstart)
+- [Core API](#core-api): `Vericto`, `Verdict`, helpers, options
+- [What each decision does](#what-each-decision-does) · [Fail mode](#fail-mode) ·
+  [Business policy context](#business-policy-context) ·
+  [Timeouts and retries](#timeouts-and-retries) · [Errors](#errors)
+- Drivers: [snowflake-sdk](#snowflake-sdk) · [better-sqlite3](#better-sqlite3)
+- [Frameworks](#frameworks): LangChain.js (official), and tested patterns for the
+  Vercel AI SDK, Mastra, the OpenAI Agents SDK, Prisma, Drizzle, Knex, node-postgres
+  and mysql2
+- [Caching](#caching) · [SQLite status](#sqlite-status) ·
+  [Enforcement boundary](#enforcement-boundary) · [Evaluators](#evaluators) ·
+  [Development](#development)
 
 ## Install
 
@@ -54,133 +62,124 @@ Create an API key with the **`proxy:evaluate`** scope in the Vericto dashboard
 | `VERICTO_TIMEOUT` | `timeoutMs` | Per-attempt timeout (env in seconds, option in ms) | 5 s |
 
 An option beats its variable. An empty or whitespace-only variable counts as
-unset, so it gets the default; an invalid value throws `VerictoConfigError`.
+unset, so it gets the default; an invalid value throws `VerictoConfigError` from
+the constructor. `options.env` replaces `process.env` as the source of the
+variables (useful in tests and workers).
 
 The key is sent only in the `X-API-Key` header, only over HTTPS (plain HTTP is
-accepted for localhost alone), and never appears in messages, `toString()` or
-`JSON.stringify()`. To trust an extra CA, use Node's `NODE_EXTRA_CA_CERTS`.
+accepted for `localhost`, `127.0.0.1` and `::1` alone), and never appears in
+messages, `toString()` or `JSON.stringify()`. To trust an extra CA, use Node's
+`NODE_EXTRA_CA_CERTS`; to go through a proxy or a custom agent, pass your own
+`fetch`.
 
 ## Quickstart
 
-### snowflake-sdk
+Ask Vericto, then run the SQL it returns. One `Vericto` per process; it reads the
+variables above.
 
 ```ts
-import snowflake from 'snowflake-sdk';
-import { VerictoBlockedError } from '@vericto/sdk';
-import { guardConnection } from '@vericto/sdk/snowflake';
+import { Vericto, VerictoBlockedError, sqlToExecute } from '@vericto/sdk';
 
-const raw = snowflake.createConnection({ account, username, authenticator: 'SNOWFLAKE_JWT', privateKeyPath });
-await raw.connectAsync();
-const conn = await guardConnection(raw);
+const vericto = new Vericto();
 
-const rows = await conn.query('SELECT id, email FROM customers WHERE id = ?', [42]);
+// Allowed, flagged or masked: run sqlToExecute(verdict), never the original.
+const verdict = await vericto.enforce('SELECT id, email FROM users WHERE id = 1', 'postgres');
+console.log(verdict.decision, verdict.ruleCode, sqlToExecute(verdict));
 
-// Callback style, with the driver's own options:
-await conn.execute({
-  sqlText: 'DELETE FROM customers',
-  complete: (err, stmt, rows) => {
-    // err is a VerictoBlockedError: the statement never reached Snowflake
-  },
-});
+// Blocked: enforce() rejects, and the statement must not run.
+try {
+  await vericto.enforce('DELETE FROM users', 'postgres');
+} catch (err) {
+  if (!(err instanceof VerictoBlockedError)) throw err; // unavailable or misconfigured: fail closed
+  console.log(err.verdict.ruleCode, err.suggestedFix);
+}
 ```
 
-`connection.execute()` returns its statement synchronously, but a Vericto check is
-a network call, so the guarded `execute()` resolves the statement. With
-`complete`, a Vericto rejection is delivered to it as `err` (and the promise
-resolves `undefined`); without it, the promise rejects. A multi-statement
-`sqlText` (`MULTI_STATEMENT_COUNT`) is evaluated as one request: a block anywhere
-means nothing runs.
+Against the documentation stub (`scripts/docs-stub.mjs`, which masks `email` and
+blocks a `DELETE` without `WHERE`), this prints:
 
-### better-sqlite3
+<!-- docs-check: output -->
+```text
+FLAGGED VERICTO-085 SELECT id, '***' AS email FROM users WHERE id = 1
+VERICTO-001 DELETE FROM users WHERE <condition>
+```
+
+`vericto.prepare(sql, dialect)` is `enforce` resolving the SQL text to run, the
+shortest way to put Vericto in front of any driver:
 
 ```ts
-import Database from 'better-sqlite3';
-import { guardDatabase } from '@vericto/sdk/better-sqlite3';
+import { Vericto } from '@vericto/sdk';
 
-const db = await guardDatabase(new Database('app.db'));
+const vericto = new Vericto();
 
-const expire = await db.prepare('DELETE FROM sessions WHERE expires_at < ?'); // checked once
-expire.run(Date.now());                                                    // synchronous, as usual
+/** Any driver: check, then run what Vericto returns. */
+export async function guardedQuery<T>(run: (sql: string) => Promise<T>, sql: string): Promise<T> {
+  return run(await vericto.prepare(sql, 'postgres'));
+}
 
-await db.run('INSERT INTO audit (event) VALUES (?)', 'login');
-const user = await db.get('SELECT * FROM users WHERE id = ?', 1);
-await db.exec(migrationSql);                                               // whole script checked first
+console.log(await guardedQuery(async (sql) => `ran: ${sql}`, 'SELECT 1'));
 ```
 
-better-sqlite3 is synchronous, so the SQL-carrying entry points (`prepare`,
-`exec`, and the `run`/`all`/`get` shortcuts) become async. A prepared statement's
-SQL cannot change, so its `run`/`all`/`get`/`iterate` stay synchronous: prepare
-statements before `db.raw.transaction(...)` and use them inside it. See
-[SQLite status](#sqlite-status).
+For a specific driver or framework, see [Drivers](#snowflake-sdk) and
+[Frameworks](#frameworks).
 
-### LangChain.js (SQL agents, tools and chains)
+## Core API
 
-```bash
-npm install @vericto/sdk @langchain/classic @langchain/core typeorm
-```
+### `new Vericto(options?)`
 
-```ts
-import { DataSource } from 'typeorm';
-import { createSqlAgent } from '@langchain/classic/agents/toolkits/sql';
-import { VerictoSqlDatabase, VerictoSqlToolkit, VerictoCheckSqlTool } from '@vericto/sdk/langchain';
+| Method | Resolves | Rejects with |
+|---|---|---|
+| `enforce(sql, dialect, options?)` | the `Verdict` (allowed, flagged, monitored, parse error, masked, or `UNEVALUATED` under fail-open) | `VerictoBlockedError` on `BLOCKED`; `VerictoUnavailableError` under `failMode: 'closed'`; `VerictoConfigError` |
+| `prepare(sql, dialect, options?)` | the SQL text to run (`sqlToExecute(verdict)`) | as `enforce` |
+| `enforceAll(statements, dialect, options?)` | one verdict per statement, in order; a block anywhere rejects before you run any of them | as `enforce` |
+| `check(sql, dialect, options?)` | the verdict, whatever it is (`BLOCKED` included; `UNEVALUATED` with the reason under fail-open): to ask, not to guard | `VerictoUnavailableError` under `failMode: 'closed'`; `VerictoConfigError` |
+| `requireDialect(dialect)` | the normalized dialect id | `VerictoUnsupportedDialectError` when the server does not list it |
+| `clearCache()` | (sync) drops the verdict cache | |
 
-const db = await VerictoSqlDatabase.fromDataSourceParams({
-  appDataSource: new DataSource({ type: 'postgres', url: process.env.DATABASE_URL }),
-  // vericto: new Vericto({ ... }), dialect: 'postgres', onBlock: 'return' | 'raise'
-});
+`dialect` is a Vericto dialect (`postgres`, `mysql`, `oracle`, `mssql`, `snowflake`,
+`sqlite`) or a driver name `normalizeDialect` maps to one (`postgresql`, `pg`,
+`mysql2`, `mariadb`, `oracledb`, `sqlserver`, `tedious`, `sqlite3`,
+`better-sqlite3`). `KNOWN_DIALECTS` lists the six.
 
-const agent = createSqlAgent(llm, new VerictoSqlToolkit(db, llm));
-await agent.invoke({ input: 'How many orders shipped last week?' });
+`options` is `{ context?, endUser? }`: the declared context of the evaluation, see
+[Business policy context](#business-policy-context).
 
-// Or give an agent a check-only tool (nothing is executed):
-const check = new VerictoCheckSqlTool({ db });
-```
+Options (`VerictoOptions`; all optional):
 
-`VerictoSqlDatabase` is a LangChain `SqlDatabase` (`@langchain/classic/sql_db`;
-`langchain/sql_db` no longer exists in LangChain.js 1.x), so it is accepted
-wherever one is: `QuerySqlTool`, `SqlToolkit`/`createSqlAgent`,
-`SqlDatabaseChain`. Its TypeORM data source is wrapped so that every `query()` is
-checked: the agent's queries, the sample rows `getTableInfo` puts in the prompt,
-and the SQL `SqlDatabaseChain` generates.
+| Option | Meaning | Default |
+|---|---|---|
+| `apiKey`, `databaseId`, `apiUrl`, `timeoutMs` | See [Configure](#configure). | environment |
+| `maxRetries` | Retries after the first attempt. | `2` |
+| `backoffMs` | Base of the exponential backoff between retries (with jitter, capped at 2 s). | `200` |
+| `dialectsTtlMs` | How long the server's dialect list is cached. | 10 minutes |
+| `failMode` | `closed` or `open`. | `VERICTO_FAIL_MODE`, else `closed` |
+| `onVerdict` | Called with every verdict, `BLOCKED` and `UNEVALUATED` included (metrics, your own audit). A throwing callback is logged and ignored. | none |
+| `logger` | `{ info, warn, error }`, or `false` to silence it. Lines carry the rule code, severity and event id, **never the SQL text**. | `console` for warnings and errors, silent for info |
+| `cacheTtlMs`, `cacheSize` | See [Caching](#caching). | `0` (off), `1024` |
+| `evaluator` | Replace the Runtime API client (see [Evaluators](#evaluators)). | `RuntimeApiEvaluator` |
+| `fetch` | A `fetch` implementation (proxies, tests). | global `fetch` |
+| `env` | Where the `VERICTO_*` defaults are read from. | `process.env` |
 
-| Verdict | What the agent sees |
+### `Verdict`
+
+| Field | Meaning |
 |---|---|
-| `BLOCKED` | `onBlock: 'return'` (default): the tool returns a message with the rule, severity, reason and suggested fix, and the query does not run, so the model can correct itself. `onBlock: 'raise'`: `VerictoBlockedError`. |
-| `FLAGGED` / `MONITORED` | The query runs; the verdict is logged and passed to `onVerdict`. |
-| mask | The masked rewrite runs, never the original: the model only sees masked values (sample rows included). |
-| no verdict, config error | Thrown (`VerictoUnavailableError`, `VerictoConfigError`), never returned to the model; the [fail mode](#fail-mode) applies. |
+| `decision` | `ALLOWED`, `FLAGGED`, `MONITORED`, `PARSE_ERROR`, `BLOCKED`, or `UNEVALUATED` (local: fail-open ran it without a verdict). An unknown decision from the server is read as `BLOCKED`. |
+| `sql`, `dialect` | The statement as submitted, and the dialect it was evaluated as. |
+| `ruleCode`, `severity`, `message` | The deciding rule, its severity, and the server's explanation when it adds one. |
+| `suggestedFix` | A safer statement Vericto proposes, when it has one. |
+| `rewrittenQuery` | When set, the statement to run **instead of** `sql`: the masked rewrite. |
+| `findings` | The rules that matched: `{ ruleCode, severity?, ruleId?, astNodePath?, suggestedFix? }`. |
+| `sensitiveColumns`, `accessDenied` | The tagged columns the statement reads, and what the key's agent allowlist denied, as the server reports them. |
+| `parseError` | The parser's message, on a parse error. |
+| `eventId` | The audit-trail event, to look the evaluation up in the dashboard. |
+| `rulesetVersion`, `cached` | Cache bookkeeping (see [Caching](#caching)). |
+| `raw` | The response body, for fields this version does not model yet. |
 
-- The dialect comes from the TypeORM type (`postgres`/`aurora-postgres`,
-  `mysql`/`mariadb`/`aurora-mysql`, `mssql`, `oracle`, `sqlite`/`better-sqlite3`/
-  `sqljs`); other types need `dialect`. The factory fails fast when the server does
-  not evaluate it.
-- `VerictoSqlToolkit` is `SqlToolkit` with `VerictoQuerySqlTool`: the stock
-  `QuerySqlTool` turns every error into text for the model, which would also
-  hand it "Vericto unavailable" (and the block under `onBlock: 'raise'`).
-  `VerictoQuerySqlTool` rethrows Vericto errors and still returns SQL errors as text.
-- A blocked sample-rows query is left out of the table info (LangChain logs the
-  error and carries on).
-- `SqlDatabaseChain` swallows query errors itself (it logs them and answers from
-  an empty result), so there a block shows up as "no result" rather than as the
-  message.
-- LangChain's schema introspection in `fromDataSourceParams` (its catalogue read
-  of tables and columns) runs on the raw data source. `db.rawDataSource` is the
-  unguarded data source: SQL run through it is not checked.
-- `VerictoCheckSqlTool` is a Runtime API evaluation like any other: it counts
-  against the runtime quota and is in the audit trail.
-
-### Any driver, by hand
-
-```ts
-import { Vericto, sqlToExecute } from '@vericto/sdk';
-
-const vericto = new Vericto();                        // one per process
-const verdict = await vericto.enforce(sql, 'postgres'); // rejects with VerictoBlockedError
-await pool.query(sqlToExecute(verdict));              // the masked rewrite, if any
-```
-
-`vericto.prepare(sql, dialect)` resolves the SQL text directly; `vericto.check()`
-resolves the verdict without applying it.
+Helpers: `sqlToExecute(verdict)` (the rewrite when there is one, else `sql`),
+`isMasked(verdict)`, `verdictFromResponse(body, sql, dialect)` (build a verdict from a
+Runtime API body, for a custom evaluator or a test double), `VERSION`, and the
+constants `DEFAULT_API_URL`, `EVALUATE_PATH`, `CONFIG_PATH`.
 
 ## What each decision does
 
@@ -189,40 +188,312 @@ resolves the verdict without applying it.
 | `ALLOWED` | Runs the statement. |
 | `FLAGGED` | Runs it, logs a warning, calls `onVerdict`. |
 | `MONITORED` | Runs it, logs at info, calls `onVerdict`. |
-| `PARSE_ERROR` (allowed) | The workspace's `parse_error_action` let it through: runs it and logs a warning. When the workspace blocks unparseable SQL, the server answers `BLOCKED`. |
+| `PARSE_ERROR` (allowed) | The workspace's `parse_error_action` let it through: runs it and logs a warning. When the workspace blocks unparseable SQL, the server answers `BLOCKED` (rule `VERICTO-PARSE-ERROR`). |
 | `BLOCKED` | Rejects with `VerictoBlockedError` (`verdict`, `findings`, `suggestedFix`) **before** the driver is called. |
 | mask (`rewrittenQuery`) | Runs `rewrittenQuery` **instead of** your SQL: the sensitive columns come back masked. Never the original. |
 | no verdict | The [fail mode](#fail-mode) decides. |
 
-`onVerdict` receives every verdict, blocked and unevaluated ones included. The
-default logger is `console` for warnings and errors (`logger: false` silences it,
-or pass your own `{ info, warn, error }`). Log lines carry the rule code, severity
-and Vericto event id, **never the SQL text**. Every evaluation is recorded in the
-Vericto audit trail.
+Every evaluation is recorded in the Vericto audit trail and counts against the
+workspace's monthly query quota.
 
 ## Fail mode
 
-When Vericto cannot answer (network error, timeout, HTTP 5xx, rate limit after
-retries, or the monthly quota `QUOTA_EXCEEDED`):
+When Vericto cannot answer (network error, timeout, HTTP 5xx, a response that is not
+JSON or has no decision, rate limit after retries, or the monthly quota
+`QUOTA_EXCEEDED`), `check()`, `enforce()` and every wrapper follow the same contract,
+shared with vericto-python 0.5.0:
 
 - `failMode: 'closed'` (default): reject with `VerictoUnavailableError`; the
   statement does not run.
-- `failMode: 'open'`: run the statement unevaluated, emit a process warning of type
-  `VerictoFailOpenWarning`, log it, and pass an `UNEVALUATED` verdict to `onVerdict`.
+- `failMode: 'open'`: never reject for it. `check()` resolves an `UNEVALUATED`
+  verdict whose `message` is the reason. `enforce()` resolves one too: the statement
+  runs unevaluated, a process warning of type `VerictoFailOpenWarning` is emitted, it
+  is logged, and the verdict goes to `onVerdict`. `VerictoCheckSqlTool` answers
+  `UNEVALUATED` with the reason.
+
+Changed in 0.4.0: `check()` (and `VerictoCheckSqlTool`) used to reject with
+`VerictoUnavailableError` under `failMode: 'open'` too. Code that caught it there now
+gets the verdict instead:
+
+```ts
+import { Vericto } from '@vericto/sdk';
+
+const vericto = new Vericto({ failMode: 'open', apiUrl: 'http://127.0.0.1:9', maxRetries: 0, logger: false });
+
+// 0.3.x: try { await vericto.check(sql, d) } catch (err) { if (err instanceof VerictoUnavailableError) ... }
+const verdict = await vericto.check('DELETE FROM orders WHERE id = 7', 'postgres');
+if (verdict.decision === 'UNEVALUATED') {
+  console.log('no verdict:', verdict.message?.startsWith('Vericto did not return a verdict'));
+}
+```
+
+<!-- docs-check: output -->
+```text
+no verdict: true
+```
 
 Configuration errors are **never** failed open: a missing or revoked key (401), a
 key without the scope or for another database (403), a malformed request (400) or
 an unsupported dialect reject with `VerictoConfigError` in both modes.
 
-Retries: network errors, timeouts, 5xx and 429 `RATE_LIMIT_EXCEEDED` are retried
-`maxRetries` times (default 2) with exponential backoff and jitter (capped at 2 s,
-honouring `Retry-After`). `QUOTA_EXCEEDED` is not retried.
+<!-- docs-check: env VERICTO_API_URL={stub}/stall -->
+```ts
+import { Vericto, VerictoUnavailableError } from '@vericto/sdk';
 
-## Parameters
+// The server sends its headers and then stalls (the stub's /stall mode): the timeout
+// still applies, closed rejects, and nothing runs.
+const closed = new Vericto({ timeoutMs: 200, maxRetries: 1, logger: false });
+try {
+  await closed.enforce('UPDATE accounts SET balance = 0 WHERE id = 7', 'postgres');
+} catch (err) {
+  if (!(err instanceof VerictoUnavailableError)) throw err;
+  console.log(err.name);
+}
 
-Bind values are **never** sent to Vericto. The SQL text goes as written,
-placeholders included (`?`, `:1` for Snowflake; `?`, `:name`, `@name`, `$name` for
-SQLite), and the driver binds the values afterwards.
+// Nothing listening at all: the same error.
+const unreachable = new Vericto({ apiUrl: 'http://127.0.0.1:9', maxRetries: 0, logger: false });
+await unreachable.enforce('SELECT 1', 'postgres').catch((err: unknown) => {
+  console.log(err instanceof VerictoUnavailableError);
+});
+
+// Closed: check() rejects with the same error.
+await closed.check('SELECT 1', 'postgres').catch((err: unknown) => {
+  console.log('check:', err instanceof VerictoUnavailableError);
+});
+
+// Open: the statement may run, unevaluated, and you are told; check() never rejects.
+const open = new Vericto({ failMode: 'open', timeoutMs: 200, maxRetries: 0, logger: false });
+const verdict = await open.enforce('SELECT 1', 'postgres');
+console.log(verdict.decision, verdict.sql);
+const asked = await open.check('DROP TABLE accounts', 'postgres');
+console.log(asked.decision, asked.message?.includes('Timeout'));
+```
+
+<!-- docs-check: output -->
+```text
+VerictoUnavailableError
+true
+check: true
+UNEVALUATED SELECT 1
+UNEVALUATED true
+```
+
+<!-- docs-check: env VERICTO_API_URL={stub}/401 -->
+```ts
+import { Vericto, VerictoConfigError } from '@vericto/sdk';
+
+// A revoked key (the stub's /401 mode) is a configuration error, even under failMode 'open'.
+const vericto = new Vericto({ failMode: 'open', logger: false });
+await vericto.enforce('SELECT 1', 'postgres').catch((err: unknown) => {
+  if (err instanceof VerictoConfigError) console.log(err.name, err.status);
+});
+```
+
+<!-- docs-check: output -->
+```text
+VerictoConfigError 401
+```
+
+## Business policy context
+
+`check`, `enforce`, `prepare` and `enforceAll` take an optional third argument with the
+declared context of the evaluation, which business policies can read:
+
+| Option | Sent as | Limits (the server's) |
+|---|---|---|
+| `context.ticket` | `context.ticket` | the change ticket the statement belongs to; 1 to 128 characters, no control characters |
+| `context.tenant` | `context.tenant` | the tenant it runs for; 1 to 128 characters, no control characters |
+| `endUser` | `end_user` | the end user your service acts for: up to 16 attributes; keys are identifiers (a letter or `_`, then letters, digits or `_`, at most 63 characters), values 1 to 256 characters, no control characters |
+
+> **Note:** takes effect when business policies are enabled in your workspace.
+> Otherwise the server ignores both fields. The values are asserted by your service:
+> they carry the trust of the API key that sends them, never more.
+
+The limits are checked before anything is sent: an invalid value rejects with
+`VerictoConfigError` (in both fail modes; the message names the field, never the
+value). No other `context` key is accepted. The verdict cache keys on them too. The
+LangChain.js wrappers take `context` and `endUser` as options, as a value or a
+function read for every statement.
+
+```ts
+import { Vericto } from '@vericto/sdk';
+
+const vericto = new Vericto({ logger: false });
+
+const verdict = await vericto.enforce('UPDATE orders SET status = $1 WHERE id = $2', 'postgres', {
+  context: { ticket: 'CHG-1042', tenant: 'acme' },
+  endUser: { id: 'u_829', role: 'support' },
+});
+console.log(verdict.decision);
+
+// Checked before it is sent: no request is made.
+await vericto.check('SELECT 1', 'postgres', { endUser: { 'user-id': 'u_829' } }).catch((err: unknown) => {
+  console.log((err as Error).name, (err as Error).message);
+});
+```
+
+<!-- docs-check: output -->
+```text
+ALLOWED
+VerictoConfigError endUser: keys are identifiers (letters, digits, _), at most 63 characters.
+```
+
+## Timeouts and retries
+
+- Each attempt, response body included, is bounded by `timeoutMs` (default 5 s,
+  `VERICTO_TIMEOUT` in seconds).
+- Network errors, timeouts, HTTP 5xx and 429 `RATE_LIMIT_EXCEEDED` are retried
+  `maxRetries` times (default 2), with exponential backoff and jitter from
+  `backoffMs` (default 200 ms), honouring `Retry-After`; every wait is capped at 2 s.
+- 429 `QUOTA_EXCEEDED` (the monthly quota) is not retried:
+  `VerictoQuotaExceededError` (`resetsAt`, `upgradeUrl`). 400, 401 and 403 are not
+  retried: `VerictoConfigError`.
+- The first check (and the first after `dialectsTtlMs`) also asks the server which
+  dialects it evaluates (`GET /api/v1/meta/config`, one attempt, `timeoutMs`). If
+  that cannot be answered nothing is cached and the evaluation request decides.
+- Worst case for one statement while Vericto is unreachable: the dialect request
+  plus `maxRetries + 1` attempts and the waits between them; with the defaults about
+  `5 + 3 × 5 + 2 × 2` = 24 s. Lower `timeoutMs` and `maxRetries` on latency-sensitive
+  paths; the fail mode then applies sooner.
+
+## Errors
+
+All extend `VerictoError`.
+
+| Error | When | Fields |
+|---|---|---|
+| `VerictoBlockedError` | Vericto blocked the statement; it was not executed. | `verdict`, `findings`, `suggestedFix`, `sql` |
+| `VerictoUnavailableError` | No verdict after the retries and `failMode: 'closed'` (from `check()`, `enforce()` and the wrappers alike). | `status`, `code` |
+| `VerictoQuotaExceededError` | Extends `VerictoUnavailableError`: monthly quota used (429 `QUOTA_EXCEEDED`). | `resetsAt`, `upgradeUrl` |
+| `VerictoConfigError` | Key, scope, database id, URL, timeout, request problem, or an invalid `context` / `endUser`; thrown in both fail modes. | `status`, `code` |
+| `VerictoUnsupportedDialectError` | Extends `VerictoConfigError`: the server does not evaluate that dialect. | `dialect`, `supported` |
+
+Error messages never contain the key or the SQL's bind values.
+
+## snowflake-sdk
+
+<!-- docs-check: skip needs snowflake-sdk and a Snowflake account; covered by test/snowflake.test.ts with a fake connection -->
+```ts
+import snowflake from 'snowflake-sdk';
+import { VerictoBlockedError } from '@vericto/sdk';
+import { guardConnection } from '@vericto/sdk/snowflake';
+
+const raw = snowflake.createConnection({
+  account: 'myorg-myaccount',
+  username: 'APP',
+  authenticator: 'SNOWFLAKE_JWT',
+  privateKeyPath: 'rsa_key.p8',
+});
+await raw.connectAsync();
+const conn = await guardConnection(raw); // rejects if the server does not evaluate snowflake
+
+const rows = await conn.query('SELECT id, email FROM customers WHERE id = ?', [42]);
+
+// Callback style, with the driver's own options:
+await conn.execute({
+  sqlText: 'DELETE FROM customers',
+  complete: (err) => {
+    if (err instanceof VerictoBlockedError) console.log(err.verdict.ruleCode); // never reached Snowflake
+  },
+});
+```
+
+`connection.execute()` returns its statement synchronously, but a Vericto check is
+a network call, so the guarded `execute()` resolves the statement. With
+`complete`, a Vericto rejection is delivered to it as `err` (and the promise
+resolves `undefined`); without it, the promise rejects. `query(sqlText, binds?,
+options?)` is a promise-style shortcut that resolves the rows (not for
+`streamResult`). A multi-statement `sqlText` (`MULTI_STATEMENT_COUNT`) is evaluated
+as one request: a block anywhere means nothing runs. `conn.raw` is the unguarded
+connection.
+
+## better-sqlite3
+
+```ts
+import Database from 'better-sqlite3';
+import { VerictoBlockedError } from '@vericto/sdk';
+import { guardDatabase } from '@vericto/sdk/better-sqlite3';
+
+const db = await guardDatabase(new Database(':memory:')); // rejects if the server does not evaluate sqlite
+
+await db.exec('CREATE TABLE sessions (id INTEGER PRIMARY KEY, expires_at INTEGER)'); // whole script checked first
+await db.run('INSERT INTO sessions (expires_at) VALUES (?)', 0);
+
+const expire = await db.prepare('DELETE FROM sessions WHERE expires_at < ?'); // checked once
+console.log(expire.run(Date.now()).changes);                               // synchronous, as usual
+
+const { statement, verdict } = await db.prepareWithVerdict('SELECT count(*) AS n FROM sessions WHERE id > ?');
+console.log(verdict.decision, statement.get(0));
+
+// better-sqlite3's type arguments: a Statement<[number], { n: number }>.
+const since = await db.prepare<[number], { n: number }>('SELECT count(*) AS n FROM sessions WHERE expires_at >= ?');
+console.log(since.get(0)?.n);
+
+try {
+  await db.run('DELETE FROM sessions'); // never reaches SQLite
+} catch (err) {
+  if (!(err instanceof VerictoBlockedError)) throw err;
+  console.log(err.verdict.ruleCode);
+}
+```
+
+<!-- docs-check: output -->
+```text
+1
+ALLOWED { n: 0 }
+0
+VERICTO-001
+```
+
+better-sqlite3 is synchronous, so the SQL-carrying entry points (`prepare`,
+`prepareWithVerdict`, `exec`, and the `run`/`all`/`get` shortcuts) become async. A
+prepared statement's SQL cannot change, so its `run`/`all`/`get`/`iterate` stay
+synchronous: prepare statements before `db.raw.transaction(...)` and use them inside
+it. An `exec` script is evaluated as one request. Bind values (`?`, `:name`, `@name`,
+`$name`) are never sent. See [SQLite status](#sqlite-status).
+
+`prepare` and `prepareWithVerdict` take better-sqlite3's own type arguments
+(`prepare<BindParameters, Result>`) and resolve exactly its `Statement` type
+(`Statement<unknown[], unknown>` without them); `all<Row>` and `get<Row>` type the rows.
+
+## Frameworks
+
+One guide per framework, each with a minimal example that CI runs against a local
+stand-in of the Runtime API, and the exact versions it was tested with. **Official**
+means an entry point of this package; **pattern** means a few lines of your own code
+around the public API (`Vericto.enforce` / `prepare` and the driver wrappers). There is
+no package-level integration for the patterns.
+
+| Framework | Status | Approach | Tested with |
+|---|---|---|---|
+| [LangChain.js](https://github.com/vericto/vericto-node/blob/main/docs/frameworks/langchain.md) | official: `@vericto/sdk/langchain` | `VerictoSqlDatabase` (a `SqlDatabase`), `VerictoSqlToolkit`, `VerictoQuerySqlTool`, `VerictoCheckSqlTool` | `@langchain/classic` 1.0.55, `@langchain/core` 1.3.0, `typeorm` 1.1.2 |
+| [Vercel AI SDK](https://github.com/vericto/vericto-node/blob/main/docs/frameworks/vercel-ai-sdk.md) | pattern | a `tool()` whose `execute` runs the query through a guarded driver | `ai` 7.0.152 |
+| [Mastra](https://github.com/vericto/vericto-node/blob/main/docs/frameworks/mastra.md) | pattern | a `createTool()` tool, same approach | `@mastra/core` 1.79.0 |
+| [OpenAI Agents SDK](https://github.com/vericto/vericto-node/blob/main/docs/frameworks/openai-agents.md) | pattern | a function `tool()`, with `errorFunction: null` so Vericto errors reach your code | `@openai/agents` 0.21.0 |
+| [Prisma ORM](https://github.com/vericto/vericto-node/blob/main/docs/frameworks/prisma.md) | pattern | wrap the driver adapter: model and raw queries are checked | `prisma` / `@prisma/client` 7.10.1 |
+| [Drizzle ORM](https://github.com/vericto/vericto-node/blob/main/docs/frameworks/drizzle.md) | pattern | a guarded `pg` pool | `drizzle-orm` 0.45.4 |
+| [Knex](https://github.com/vericto/vericto-node/blob/main/docs/frameworks/knex.md) | pattern | guard each connection in `pool.afterCreate` | `knex` 3.3.0 |
+| [node-postgres](https://github.com/vericto/vericto-node/blob/main/docs/frameworks/node-postgres.md) | pattern | guard each pool client on `connect` | `pg` 8.23.1 |
+| [mysql2](https://github.com/vericto/vericto-node/blob/main/docs/frameworks/mysql2.md) | pattern | `query` / `execute` functions in front of the pool | `mysql2` 3.24.6 |
+
+For PostgreSQL and MySQL, the Vericto TCP proxy protects every connection without
+code changes (and enforces masks); the patterns are for when you cannot use it.
+
+### LangChain.js in short
+
+```bash
+npm install @vericto/sdk @langchain/classic @langchain/core typeorm
+```
+
+`VerictoSqlDatabase.fromDataSourceParams({ appDataSource })` is a LangChain
+`SqlDatabase` (`@langchain/classic/sql_db`; `langchain/sql_db` no longer exists in
+LangChain.js 1.x) whose TypeORM data source checks every query: the agent's queries,
+the sample rows `getTableInfo` puts in the prompt, and the SQL `SqlDatabaseChain`
+generates. Use `new VerictoSqlToolkit(db, llm)` with `createSqlAgent`. A block comes
+back to the model as a message with the rule and the suggested fix (`onBlock:
+'return'`, default) or rejects with `VerictoBlockedError` (`onBlock: 'raise'`); Vericto
+being unavailable or misconfigured is thrown, never handed to the model. The full,
+tested example and the API table are in the [LangChain.js guide](https://github.com/vericto/vericto-node/blob/main/docs/frameworks/langchain.md).
 
 ## Caching
 
@@ -250,37 +521,55 @@ check against a real server.
 
 ## Enforcement boundary
 
-The wrapper protects the SQL that goes through it. `db.raw`, `conn.raw`, another
-connection or another process with the same credentials are not checked. Pair the
-wrapper with database-side least privilege (and, for Snowflake, a network policy)
-when the guarantee matters.
-
-## Errors
-
-All extend `VerictoError`.
-
-| Error | When |
-|---|---|
-| `VerictoBlockedError` | Vericto blocked the statement. `.verdict`, `.findings`, `.suggestedFix`, `.sql`. |
-| `VerictoUnavailableError` | No verdict and `failMode: 'closed'`. |
-| `VerictoQuotaExceededError` | Extends `VerictoUnavailableError`: monthly quota used (`.resetsAt`). |
-| `VerictoConfigError` | Key, scope, database id, URL or request problem. Thrown in both fail modes. |
-| `VerictoUnsupportedDialectError` | Extends `VerictoConfigError`: the server does not evaluate that dialect. |
+The wrapper protects the SQL that goes through it. `db.raw`, `conn.raw`,
+`rawDataSource`, another connection or another process with the same credentials
+are not checked. Pair the wrapper with database-side least privilege (and, for
+Snowflake, a network policy) when the guarantee matters, and use the Vericto TCP
+proxy where one exists (PostgreSQL, MySQL).
 
 ## Evaluators
 
-`Vericto` takes an `evaluator`: any object with `evaluate(sql, dialect)` and
-`supportedDialects()`. This release ships `RuntimeApiEvaluator`. An embedded
-evaluator (the Vericto engine in-process, for example WASM, with synced rules) can
-be added later behind the same interface without changing the wrappers.
+`Vericto` takes an `evaluator`: any object with `evaluate(sql, dialect, options?)` and
+`supportedDialects()` (and optionally `apiUrl`, shown in messages). The guard passes
+`options` (`{ context, endUser }`) only when the caller gives them; an evaluator that
+declares `evaluate(sql, dialect)` still works, and ignores them. This release
+ships `RuntimeApiEvaluator`. An embedded evaluator (the Vericto engine in-process,
+for example WASM, with synced rules) can be added later behind the same interface
+without changing the wrappers.
+
+A custom evaluator is also how you test your own code without the network:
+
+```ts
+import { Vericto, verdictFromResponse, type Evaluator } from '@vericto/sdk';
+
+// Blocks every DELETE, allows the rest. Never use a fake like this in production.
+const fake: Evaluator = {
+  evaluate: async (sql, dialect) =>
+    verdictFromResponse(
+      sql.startsWith('DELETE') ? { decision: 'BLOCKED', rule_code: 'VERICTO-001' } : { decision: 'ALLOWED' },
+      sql,
+      dialect,
+    ),
+  supportedDialects: async () => undefined,
+};
+const vericto = new Vericto({ evaluator: fake, logger: false });
+console.log((await vericto.check('DELETE FROM t', 'postgres')).decision);
+```
+
+<!-- docs-check: output -->
+```text
+BLOCKED
+```
 
 ## Integrations roadmap
 
 Not implemented yet; each is meant to be a thin layer over `Vericto.enforce`:
 
 - **LlamaIndex.TS** SQL tools.
-- **`pg` and `mysql2`**: `pool.query` wrappers (the TCP proxy already covers
-  PostgreSQL and MySQL without code changes).
+- **`pg` and `mysql2`** `pool.query` wrappers in this package (until then, the
+  [node-postgres](https://github.com/vericto/vericto-node/blob/main/docs/frameworks/node-postgres.md) and [mysql2](https://github.com/vericto/vericto-node/blob/main/docs/frameworks/mysql2.md)
+  guides document tested patterns; the TCP proxy already covers PostgreSQL and MySQL
+  without code changes).
 - **Cloudflare D1** Workers binding helper.
 - **Embedded evaluator** (WASM).
 
@@ -295,10 +584,31 @@ npm run test:coverage  # the same suite with V8 coverage of src/ (what CI runs);
                        # lines, statements, functions or branches. Live tests are excluded.
 npm run build       # tsup → dist/ (ESM + CJS + .d.ts)
 npm run smoke       # the built package, ESM and CJS, on any Node >= 18
+npm run docs:check  # README + LangChain.js guide examples, type-checked and run against the stub
 ```
 
-Development needs Node 22+ (the tooling); the published package runs on Node 18+.
-Nothing in the test suite connects to Snowflake.
+Development needs Node 22+ (the tooling; the docs check uses type stripping, 22.6+);
+the published package runs on Node 18+. Nothing in the test suite connects to
+Snowflake.
+
+### Documentation examples
+
+`scripts/check-docs-examples.mjs` extracts every ```` ```ts ```` block of this README
+and of `docs/frameworks/*.md`, type-checks them (strict) and runs each with Node's type
+stripping against `scripts/docs-stub.mjs`, a local stand-in for the Runtime API with
+the documented response shapes (no key, no network). A block can declare extra
+environment, an expected output (compared exactly), or a skip with its reason, in
+HTML comments (see the script's header). The framework guides run in their own
+project, `docs/frameworks/` (pinned framework versions, not published), against
+PostgreSQL and MySQL:
+
+```bash
+npm run build && npm run docs:check                         # core suite
+cd docs/frameworks && npm ci && cd ../..
+DATABASE_URL=postgres://... MYSQL_URL=mysql://... node scripts/check-docs-examples.mjs frameworks
+```
+
+CI runs both (`docs` job, with PostgreSQL 17 and MySQL 8.4 service containers).
 
 ### Live tests
 
@@ -367,25 +677,38 @@ under its own [terms](https://vericto.com/terms).
 
 ## En español
 
-`@vericto/sdk` (antes `@vericto/vericto`, nunca publicado) valida cada sentencia
-SQL con Vericto **antes** de ejecutarla: wrappers para `snowflake-sdk` y
-`better-sqlite3`, una integración con LangChain.js (`@vericto/sdk/langchain`) y un
-cliente de la Runtime API para cualquier otro driver. En LangChain.js, una consulta
-bloqueada devuelve al agente un mensaje con la regla y la corrección sugerida (o
-lanza `VerictoBlockedError` con `onBlock: 'raise'`), y las consultas con columnas
-enmascaradas se ejecutan reescritas.
+`@vericto/sdk` valida cada sentencia SQL con Vericto **antes** de ejecutarla:
+wrappers para `snowflake-sdk` y `better-sqlite3`, una integración oficial con
+LangChain.js (`@vericto/sdk/langchain`) y un cliente de la Runtime API para cualquier
+otro driver. Toda la API es asíncrona: cada validación es una llamada de red.
 
 - **BLOCKED**: rechaza con `VerictoBlockedError` (hallazgos y corrección sugerida) y
   la sentencia no llega a la base de datos.
 - **FLAGGED / MONITORED**: se ejecuta y se registra (`onVerdict`, logger).
 - **Máscara de columnas sensibles**: se ejecuta `rewrittenQuery`, nunca la original.
-- **Sin respuesta de Vericto**: `failMode: 'closed'` (por defecto) bloquea; `'open'`
-  ejecuta y emite el aviso `VerictoFailOpenWarning`. Los errores de configuración
-  nunca se dejan pasar.
+- **Sin respuesta de Vericto**: `failMode: 'closed'` (por defecto) rechaza con
+  `VerictoUnavailableError`, en `check()`, `enforce()` y los wrappers; `'open'` nunca
+  rechaza por eso: `check()` devuelve un veredicto `UNEVALUATED` con el motivo y
+  `enforce()` ejecuta y emite el aviso `VerictoFailOpenWarning` (desde 0.4.0; antes
+  `check()` rechazaba también en `'open'`). Los errores de configuración (clave
+  revocada, permiso, dialecto) nunca se dejan pasar. Cada intento, incluida la lectura
+  de la respuesta, tiene el límite de `timeoutMs` (5 s por defecto), con 2 reintentos.
+- **Contexto de políticas de negocio**: `check`, `enforce`, `prepare` y `enforceAll`
+  aceptan `{ context: { ticket, tenant }, endUser }`, validados con los límites del
+  servidor antes de enviarlos. Tienen efecto cuando las políticas de negocio están
+  habilitadas en tu workspace.
 
 Configuración: `VERICTO_API_KEY` (clave `vtro_...` con el scope `proxy:evaluate`),
 `VERICTO_DATABASE_ID` y, opcionalmente, `VERICTO_API_URL`, `VERICTO_FAIL_MODE`,
 `VERICTO_TIMEOUT`. Los valores de los parámetros nunca se envían a Vericto.
+
+Frameworks: LangChain.js tiene integración oficial. Para el Vercel AI SDK, Mastra, el
+OpenAI Agents SDK, Prisma, Drizzle, Knex, node-postgres y mysql2 hay patrones
+documentados y probados (unas pocas líneas propias alrededor de la API pública, no
+una integración del paquete), cada uno con su guía en
+[docs/frameworks](https://github.com/vericto/vericto-node/blob/main/docs/frameworks/README.md) y las versiones con las que se probó. Los
+ejemplos de este README y de las guías se ejecutan en CI contra un simulador local de
+la Runtime API.
 
 SQLite: el servidor de Vericto evalúa el dialecto `sqlite` (vericto-engine
 4.1.0+). `guardDatabase()` igual consulta `GET /api/v1/meta/config` y, si un
