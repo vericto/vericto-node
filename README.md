@@ -32,6 +32,7 @@ dbt and Airflow) lives in [vericto-python](https://github.com/vericto/vericto-py
 - [Install](#install) · [Configure](#configure) · [Quickstart](#quickstart)
 - [Core API](#core-api): `Vericto`, `Verdict`, helpers, options
 - [What each decision does](#what-each-decision-does) · [Fail mode](#fail-mode) ·
+  [Business policy context](#business-policy-context) ·
   [Timeouts and retries](#timeouts-and-retries) · [Errors](#errors)
 - Drivers: [snowflake-sdk](#snowflake-sdk) · [better-sqlite3](#better-sqlite3)
 - [Frameworks](#frameworks): LangChain.js (official), and tested patterns for the
@@ -128,10 +129,10 @@ For a specific driver or framework, see [Drivers](#snowflake-sdk) and
 
 | Method | Resolves | Rejects with |
 |---|---|---|
-| `enforce(sql, dialect)` | the `Verdict` (allowed, flagged, monitored, parse error, masked, or `UNEVALUATED` under fail-open) | `VerictoBlockedError` on `BLOCKED`; `VerictoUnavailableError` under `failMode: 'closed'`; `VerictoConfigError` |
-| `prepare(sql, dialect)` | the SQL text to run (`sqlToExecute(verdict)`) | as `enforce` |
-| `enforceAll(statements, dialect)` | one verdict per statement, in order; a block anywhere rejects before you run any of them | as `enforce` |
-| `check(sql, dialect)` | the verdict, whatever it is (`BLOCKED` included): to ask, not to guard | `VerictoUnavailableError` (the fail mode is **not** applied), `VerictoConfigError` |
+| `enforce(sql, dialect, options?)` | the `Verdict` (allowed, flagged, monitored, parse error, masked, or `UNEVALUATED` under fail-open) | `VerictoBlockedError` on `BLOCKED`; `VerictoUnavailableError` under `failMode: 'closed'`; `VerictoConfigError` |
+| `prepare(sql, dialect, options?)` | the SQL text to run (`sqlToExecute(verdict)`) | as `enforce` |
+| `enforceAll(statements, dialect, options?)` | one verdict per statement, in order; a block anywhere rejects before you run any of them | as `enforce` |
+| `check(sql, dialect, options?)` | the verdict, whatever it is (`BLOCKED` included; `UNEVALUATED` with the reason under fail-open): to ask, not to guard | `VerictoUnavailableError` under `failMode: 'closed'`; `VerictoConfigError` |
 | `requireDialect(dialect)` | the normalized dialect id | `VerictoUnsupportedDialectError` when the server does not list it |
 | `clearCache()` | (sync) drops the verdict cache | |
 
@@ -139,6 +140,9 @@ For a specific driver or framework, see [Drivers](#snowflake-sdk) and
 `sqlite`) or a driver name `normalizeDialect` maps to one (`postgresql`, `pg`,
 `mysql2`, `mariadb`, `oracledb`, `sqlserver`, `tedious`, `sqlite3`,
 `better-sqlite3`). `KNOWN_DIALECTS` lists the six.
+
+`options` is `{ context?, endUser? }`: the declared context of the evaluation, see
+[Business policy context](#business-policy-context).
 
 Options (`VerictoOptions`; all optional):
 
@@ -194,13 +198,39 @@ workspace's monthly query quota.
 
 ## Fail mode
 
-When Vericto cannot answer (network error, timeout, HTTP 5xx, rate limit after
-retries, or the monthly quota `QUOTA_EXCEEDED`):
+When Vericto cannot answer (network error, timeout, HTTP 5xx, a response that is not
+JSON or has no decision, rate limit after retries, or the monthly quota
+`QUOTA_EXCEEDED`), `check()`, `enforce()` and every wrapper follow the same contract,
+shared with vericto-python 0.5.0:
 
 - `failMode: 'closed'` (default): reject with `VerictoUnavailableError`; the
   statement does not run.
-- `failMode: 'open'`: run the statement unevaluated, emit a process warning of type
-  `VerictoFailOpenWarning`, log it, and pass an `UNEVALUATED` verdict to `onVerdict`.
+- `failMode: 'open'`: never reject for it. `check()` resolves an `UNEVALUATED`
+  verdict whose `message` is the reason. `enforce()` resolves one too: the statement
+  runs unevaluated, a process warning of type `VerictoFailOpenWarning` is emitted, it
+  is logged, and the verdict goes to `onVerdict`. `VerictoCheckSqlTool` answers
+  `UNEVALUATED` with the reason.
+
+Changed in 0.4.0: `check()` (and `VerictoCheckSqlTool`) used to reject with
+`VerictoUnavailableError` under `failMode: 'open'` too. Code that caught it there now
+gets the verdict instead:
+
+```ts
+import { Vericto } from '@vericto/sdk';
+
+const vericto = new Vericto({ failMode: 'open', apiUrl: 'http://127.0.0.1:9', maxRetries: 0, logger: false });
+
+// 0.3.x: try { await vericto.check(sql, d) } catch (err) { if (err instanceof VerictoUnavailableError) ... }
+const verdict = await vericto.check('DELETE FROM orders WHERE id = 7', 'postgres');
+if (verdict.decision === 'UNEVALUATED') {
+  console.log('no verdict:', verdict.message?.startsWith('Vericto did not return a verdict'));
+}
+```
+
+<!-- docs-check: output -->
+```text
+no verdict: true
+```
 
 Configuration errors are **never** failed open: a missing or revoked key (401), a
 key without the scope or for another database (403), a malformed request (400) or
@@ -226,17 +256,26 @@ await unreachable.enforce('SELECT 1', 'postgres').catch((err: unknown) => {
   console.log(err instanceof VerictoUnavailableError);
 });
 
-// Open: the statement may run, unevaluated, and you are told.
+// Closed: check() rejects with the same error.
+await closed.check('SELECT 1', 'postgres').catch((err: unknown) => {
+  console.log('check:', err instanceof VerictoUnavailableError);
+});
+
+// Open: the statement may run, unevaluated, and you are told; check() never rejects.
 const open = new Vericto({ failMode: 'open', timeoutMs: 200, maxRetries: 0, logger: false });
 const verdict = await open.enforce('SELECT 1', 'postgres');
 console.log(verdict.decision, verdict.sql);
+const asked = await open.check('DROP TABLE accounts', 'postgres');
+console.log(asked.decision, asked.message?.includes('Timeout'));
 ```
 
 <!-- docs-check: output -->
 ```text
 VerictoUnavailableError
 true
+check: true
 UNEVALUATED SELECT 1
+UNEVALUATED true
 ```
 
 <!-- docs-check: env VERICTO_API_URL={stub}/401 -->
@@ -253,6 +292,50 @@ await vericto.enforce('SELECT 1', 'postgres').catch((err: unknown) => {
 <!-- docs-check: output -->
 ```text
 VerictoConfigError 401
+```
+
+## Business policy context
+
+`check`, `enforce`, `prepare` and `enforceAll` take an optional third argument with the
+declared context of the evaluation, which business policies can read:
+
+| Option | Sent as | Limits (the server's) |
+|---|---|---|
+| `context.ticket` | `context.ticket` | the change ticket the statement belongs to; 1 to 128 characters, no control characters |
+| `context.tenant` | `context.tenant` | the tenant it runs for; 1 to 128 characters, no control characters |
+| `endUser` | `end_user` | the end user your service acts for: up to 16 attributes; keys are identifiers (a letter or `_`, then letters, digits or `_`, at most 63 characters), values 1 to 256 characters, no control characters |
+
+> **Note:** takes effect when business policies are enabled in your workspace.
+> Otherwise the server ignores both fields. The values are asserted by your service:
+> they carry the trust of the API key that sends them, never more.
+
+The limits are checked before anything is sent: an invalid value rejects with
+`VerictoConfigError` (in both fail modes; the message names the field, never the
+value). No other `context` key is accepted. The verdict cache keys on them too. The
+LangChain.js wrappers take `context` and `endUser` as options, as a value or a
+function read for every statement.
+
+```ts
+import { Vericto } from '@vericto/sdk';
+
+const vericto = new Vericto({ logger: false });
+
+const verdict = await vericto.enforce('UPDATE orders SET status = $1 WHERE id = $2', 'postgres', {
+  context: { ticket: 'CHG-1042', tenant: 'acme' },
+  endUser: { id: 'u_829', role: 'support' },
+});
+console.log(verdict.decision);
+
+// Checked before it is sent: no request is made.
+await vericto.check('SELECT 1', 'postgres', { endUser: { 'user-id': 'u_829' } }).catch((err: unknown) => {
+  console.log((err as Error).name, (err as Error).message);
+});
+```
+
+<!-- docs-check: output -->
+```text
+ALLOWED
+VerictoConfigError endUser: keys are identifiers (letters, digits, _), at most 63 characters.
 ```
 
 ## Timeouts and retries
@@ -280,9 +363,9 @@ All extend `VerictoError`.
 | Error | When | Fields |
 |---|---|---|
 | `VerictoBlockedError` | Vericto blocked the statement; it was not executed. | `verdict`, `findings`, `suggestedFix`, `sql` |
-| `VerictoUnavailableError` | No verdict after the retries and `failMode: 'closed'` (always from `check()`). | `status`, `code` |
+| `VerictoUnavailableError` | No verdict after the retries and `failMode: 'closed'` (from `check()`, `enforce()` and the wrappers alike). | `status`, `code` |
 | `VerictoQuotaExceededError` | Extends `VerictoUnavailableError`: monthly quota used (429 `QUOTA_EXCEEDED`). | `resetsAt`, `upgradeUrl` |
-| `VerictoConfigError` | Key, scope, database id, URL, timeout or request problem; thrown in both fail modes. | `status`, `code` |
+| `VerictoConfigError` | Key, scope, database id, URL, timeout, request problem, or an invalid `context` / `endUser`; thrown in both fail modes. | `status`, `code` |
 | `VerictoUnsupportedDialectError` | Extends `VerictoConfigError`: the server does not evaluate that dialect. | `dialect`, `supported` |
 
 Error messages never contain the key or the SQL's bind values.
@@ -342,6 +425,10 @@ console.log(expire.run(Date.now()).changes);                               // sy
 const { statement, verdict } = await db.prepareWithVerdict('SELECT count(*) AS n FROM sessions WHERE id > ?');
 console.log(verdict.decision, statement.get(0));
 
+// better-sqlite3's type arguments: a Statement<[number], { n: number }>.
+const since = await db.prepare<[number], { n: number }>('SELECT count(*) AS n FROM sessions WHERE expires_at >= ?');
+console.log(since.get(0)?.n);
+
 try {
   await db.run('DELETE FROM sessions'); // never reaches SQLite
 } catch (err) {
@@ -354,6 +441,7 @@ try {
 ```text
 1
 ALLOWED { n: 0 }
+0
 VERICTO-001
 ```
 
@@ -363,6 +451,10 @@ prepared statement's SQL cannot change, so its `run`/`all`/`get`/`iterate` stay
 synchronous: prepare statements before `db.raw.transaction(...)` and use them inside
 it. An `exec` script is evaluated as one request. Bind values (`?`, `:name`, `@name`,
 `$name`) are never sent. See [SQLite status](#sqlite-status).
+
+`prepare` and `prepareWithVerdict` take better-sqlite3's own type arguments
+(`prepare<BindParameters, Result>`) and resolve exactly its `Statement` type
+(`Statement<unknown[], unknown>` without them); `all<Row>` and `get<Row>` type the rows.
 
 ## Frameworks
 
@@ -437,8 +529,10 @@ proxy where one exists (PostgreSQL, MySQL).
 
 ## Evaluators
 
-`Vericto` takes an `evaluator`: any object with `evaluate(sql, dialect)` and
-`supportedDialects()` (and optionally `apiUrl`, shown in messages). This release
+`Vericto` takes an `evaluator`: any object with `evaluate(sql, dialect, options?)` and
+`supportedDialects()` (and optionally `apiUrl`, shown in messages). The guard passes
+`options` (`{ context, endUser }`) only when the caller gives them; an evaluator that
+declares `evaluate(sql, dialect)` still works, and ignores them. This release
 ships `RuntimeApiEvaluator`. An embedded evaluator (the Vericto engine in-process,
 for example WASM, with synced rules) can be added later behind the same interface
 without changing the wrappers.
@@ -592,11 +686,17 @@ otro driver. Toda la API es asíncrona: cada validación es una llamada de red.
   la sentencia no llega a la base de datos.
 - **FLAGGED / MONITORED**: se ejecuta y se registra (`onVerdict`, logger).
 - **Máscara de columnas sensibles**: se ejecuta `rewrittenQuery`, nunca la original.
-- **Sin respuesta de Vericto**: `failMode: 'closed'` (por defecto) bloquea; `'open'`
-  ejecuta y emite el aviso `VerictoFailOpenWarning`. Los errores de configuración
-  (clave revocada, permiso, dialecto) nunca se dejan pasar. Cada intento, incluida la
-  lectura de la respuesta, tiene el límite de `timeoutMs` (5 s por defecto), con 2
-  reintentos.
+- **Sin respuesta de Vericto**: `failMode: 'closed'` (por defecto) rechaza con
+  `VerictoUnavailableError`, en `check()`, `enforce()` y los wrappers; `'open'` nunca
+  rechaza por eso: `check()` devuelve un veredicto `UNEVALUATED` con el motivo y
+  `enforce()` ejecuta y emite el aviso `VerictoFailOpenWarning` (desde 0.4.0; antes
+  `check()` rechazaba también en `'open'`). Los errores de configuración (clave
+  revocada, permiso, dialecto) nunca se dejan pasar. Cada intento, incluida la lectura
+  de la respuesta, tiene el límite de `timeoutMs` (5 s por defecto), con 2 reintentos.
+- **Contexto de políticas de negocio**: `check`, `enforce`, `prepare` y `enforceAll`
+  aceptan `{ context: { ticket, tenant }, endUser }`, validados con los límites del
+  servidor antes de enviarlos. Tienen efecto cuando las políticas de negocio están
+  habilitadas en tu workspace.
 
 Configuración: `VERICTO_API_KEY` (clave `vtro_...` con el scope `proxy:evaluate`),
 `VERICTO_DATABASE_ID` y, opcionalmente, `VERICTO_API_URL`, `VERICTO_FAIL_MODE`,

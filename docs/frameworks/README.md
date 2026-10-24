@@ -17,7 +17,7 @@ integration.
 | [node-postgres](node-postgres.md) | pattern | `pg` 8.23.1 |
 | [mysql2](mysql2.md) | pattern | `mysql2` 3.24.6 |
 
-All with `@vericto/sdk` 0.3.1 on Node.js 25.8.0 locally and Node.js 22 in CI.
+All with `@vericto/sdk` 0.4.0 on Node.js 25.8.0 locally and Node.js 22 in CI.
 
 Every ```` ```ts ```` block in these guides is type-checked and run by
 `scripts/check-docs-examples.mjs` against a local stand-in for the Runtime API

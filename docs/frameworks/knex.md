@@ -9,7 +9,7 @@ builder, `knex.raw`, transactions, migrations) is checked with Vericto first.
 Knex's `query` event cannot do this: it is a notification, it cannot stop or rewrite a
 query. For PostgreSQL and MySQL the Vericto **TCP proxy** needs no code at all.
 
-Tested with: Node.js 25.8.0 (CI: Node.js 22), `@vericto/sdk` 0.3.1, `knex` 3.3.0,
+Tested with: Node.js 25.8.0 (CI: Node.js 22), `@vericto/sdk` 0.4.0, `knex` 3.3.0,
 `pg` 8.23.1, PostgreSQL 17.
 
 ## Install

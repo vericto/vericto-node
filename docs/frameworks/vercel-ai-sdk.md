@@ -6,7 +6,7 @@ driver, so Vericto checks every query the model writes before the database sees 
 block goes back to the model as the tool result (with the rule and the suggested fix),
 so it can rewrite the query.
 
-Tested with: Node.js 25.8.0 (CI: Node.js 22), `@vericto/sdk` 0.3.1, `ai` 7.0.152,
+Tested with: Node.js 25.8.0 (CI: Node.js 22), `@vericto/sdk` 0.4.0, `ai` 7.0.152,
 `zod` 4.6.7, `better-sqlite3` 13.0.3. The example uses the AI SDK's own scripted test
 model (`MockLanguageModelV4` from `ai/test`), so no model is called.
 
@@ -102,4 +102,6 @@ In your application `model` is your provider's model (`openai('...')`,
 - `streamText` calls the same `execute`: the pattern is identical.
 - Each query the model writes is one Runtime API evaluation.
 - A tool that only **checks** SQL (no execution) is `vericto.check(sql, dialect)`, which
-  resolves the verdict without applying it.
+  resolves the verdict without applying it. It follows the fail mode: under
+  `failMode: 'open'` it resolves an `UNEVALUATED` verdict with the reason instead of
+  rejecting (since `@vericto/sdk` 0.4.0).

@@ -9,7 +9,7 @@ and transactions are all checked, after Drizzle has built the SQL.
 For PostgreSQL and MySQL the Vericto **TCP proxy** does the same without code (point
 the connection string at it); use this pattern when you cannot.
 
-Tested with: Node.js 25.8.0 (CI: Node.js 22), `@vericto/sdk` 0.3.1, `drizzle-orm`
+Tested with: Node.js 25.8.0 (CI: Node.js 22), `@vericto/sdk` 0.4.0, `drizzle-orm`
 0.45.4, `pg` 8.23.1, PostgreSQL 17.
 
 ## Install

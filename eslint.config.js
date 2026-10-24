@@ -40,4 +40,15 @@ export default tseslint.config(
       '@typescript-eslint/require-await': 'off',
     },
   },
+  {
+    // Type tests (compiled by `npm run typecheck`, never run): values exist only to be
+    // type-checked, and the equality helper's type parameters are the assertion.
+    files: ['test/types/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-unused-vars': 'off',
+      '@typescript-eslint/no-unnecessary-type-parameters': 'off',
+      '@typescript-eslint/no-unnecessary-type-arguments': 'off',
+      '@typescript-eslint/no-meaningless-void-operator': 'off',
+    },
+  },
 );

@@ -10,6 +10,7 @@ import {
   VerictoUnsupportedDialectError,
 } from './errors.js';
 import type { Evaluator } from './evaluator.js';
+import { policyFields, type EvaluationOptions, type PolicyFields } from './policy-context.js';
 import { RuntimeApiEvaluator, type RuntimeApiOptions } from './runtime-api.js';
 import { isMasked, sqlToExecute, unevaluatedVerdict, type Verdict } from './verdict.js';
 
@@ -27,8 +28,10 @@ export interface VerictoOptions extends RuntimeApiOptions {
   evaluator?: Evaluator;
   /**
    * `closed` (default, or `VERICTO_FAIL_MODE`): when Vericto cannot answer, reject with
-   * `VerictoUnavailableError` and do not run the statement. `open`: run it unevaluated,
-   * emit a process warning (`VerictoFailOpenWarning`) and log it.
+   * `VerictoUnavailableError` (from `check`, `enforce` and every wrapper) and do not run
+   * the statement. `open`: never reject for it; `check` resolves an `UNEVALUATED`
+   * verdict with the reason, and `enforce` also lets the statement run unevaluated,
+   * emits a process warning (`VerictoFailOpenWarning`) and logs it.
    */
   failMode?: FailMode;
   /** Milliseconds to reuse a verdict for the same `(sql, dialect)`. 0 (default) disables it. */
@@ -99,32 +102,47 @@ export class Vericto {
   }
 
   /**
-   * Evaluate `sql` and resolve the verdict, whatever it is. Does not apply the fail
-   * mode and does not reject on `BLOCKED`: use it to ask, and `enforce` to guard.
-   * Rejects with `VerictoUnavailableError` (even under `failMode: 'open'`) or
-   * `VerictoConfigError`.
+   * Evaluate `sql` and resolve the verdict, whatever it is: use it to ask, and
+   * `enforce` to guard. Does not reject on `BLOCKED` (the verdict says so).
+   *
+   * When Vericto cannot answer, the fail mode applies, as in `enforce`: `closed`
+   * rejects with `VerictoUnavailableError`; `open` resolves an `UNEVALUATED` verdict
+   * whose `message` is the reason, and logs a warning. `VerictoConfigError` rejects in
+   * both modes.
+   *
+   * `options.context` (`{ ticket, tenant }`) and `options.endUser` (up to 16 attributes
+   * of the end user your service acts for) are sent with the request, checked first
+   * with the server's limits. They take effect when business policies are enabled in
+   * your workspace.
    */
-  async check(sql: string, dialect: string): Promise<Verdict> {
+  async check(sql: string, dialect: string, options?: EvaluationOptions): Promise<Verdict> {
     if (typeof sql !== 'string') {
       throw new TypeError(`vericto: expected the SQL text as a string, got ${typeof sql}.`);
     }
-    const name = await this.requireDialect(dialect);
-    const hit = this.#cache?.get(sql, name);
-    if (hit) return hit;
-    const verdict = await this.evaluator.evaluate(sql, name);
-    this.#cache?.put(verdict);
-    return verdict;
+    const fields = policyFields(options);
+    try {
+      return await this.#evaluate(sql, dialect, fields);
+    } catch (err) {
+      if (!(err instanceof VerictoUnavailableError) || this.failMode === 'closed') throw err;
+      this.#logger.warn(`vericto: no verdict, check answered UNEVALUATED (failMode=open): ${err.message}`);
+      return unevaluatedVerdict(sql, normalizeDialect(dialect), err.message);
+    }
   }
 
   /**
    * Evaluate `sql` and apply the decision: reject with `VerictoBlockedError` on
    * `BLOCKED`; log `FLAGGED`/`MONITORED`/allowed `PARSE_ERROR`; apply the fail mode
    * when Vericto cannot answer. Run `sqlToExecute(verdict)` (the masked rewrite, if any).
+   * `options` (`context`, `endUser`) are sent as in `check`.
    */
-  async enforce(sql: string, dialect: string): Promise<Verdict> {
+  async enforce(sql: string, dialect: string, options?: EvaluationOptions): Promise<Verdict> {
+    if (typeof sql !== 'string') {
+      throw new TypeError(`vericto: expected the SQL text as a string, got ${typeof sql}.`);
+    }
+    const fields = policyFields(options);
     let verdict: Verdict;
     try {
-      verdict = await this.check(sql, dialect);
+      verdict = await this.#evaluate(sql, dialect, fields);
     } catch (err) {
       if (!(err instanceof VerictoUnavailableError)) throw err;
       if (this.failMode === 'closed') {
@@ -144,15 +162,29 @@ export class Vericto {
   }
 
   /** `enforce`, resolving the SQL text to execute. */
-  async prepare(sql: string, dialect: string): Promise<string> {
-    return sqlToExecute(await this.enforce(sql, dialect));
+  async prepare(sql: string, dialect: string, options?: EvaluationOptions): Promise<string> {
+    return sqlToExecute(await this.enforce(sql, dialect, options));
   }
 
   /** Enforce a batch in order; a block anywhere rejects before the caller runs any of it. */
-  async enforceAll(statements: readonly string[], dialect: string): Promise<Verdict[]> {
+  async enforceAll(statements: readonly string[], dialect: string, options?: EvaluationOptions): Promise<Verdict[]> {
     const out: Verdict[] = [];
-    for (const statement of statements) out.push(await this.enforce(statement, dialect));
+    for (const statement of statements) out.push(await this.enforce(statement, dialect, options));
     return out;
+  }
+
+  /** One evaluation through the cache; rejects with what the evaluator rejects with. */
+  async #evaluate(sql: string, dialect: string, fields: PolicyFields): Promise<Verdict> {
+    const name = await this.requireDialect(dialect);
+    // A verdict depends on the declared context too: it is part of the cache key.
+    const scope = fields.context || fields.end_user ? JSON.stringify([fields.context ?? null, sortKeys(fields.end_user)]) : '';
+    const hit = this.#cache?.get(sql, name, scope);
+    if (hit) return hit;
+    const options: EvaluationOptions | undefined =
+      fields.context || fields.end_user ? { context: fields.context, endUser: fields.end_user } : undefined;
+    const verdict = options ? await this.evaluator.evaluate(sql, name, options) : await this.evaluator.evaluate(sql, name);
+    this.#cache?.put(verdict, scope);
+    return verdict;
   }
 
   /** Drop every cached verdict (only relevant with `cacheTtlMs` > 0). */
@@ -193,6 +225,10 @@ export class Vericto {
   }
 }
 
+function sortKeys(attrs: Record<string, string> | undefined): [string, string][] | null {
+  return attrs ? Object.entries(attrs).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)) : null;
+}
+
 function emitFailOpenWarning(reason: string): void {
   if (typeof process !== 'undefined' && typeof process.emitWarning === 'function') {
     process.emitWarning(`Vericto could not evaluate the statement and failMode is 'open', so it ran unchecked: ${reason}`, {
@@ -203,8 +239,9 @@ function emitFailOpenWarning(reason: string): void {
 }
 
 /**
- * Small TTL + LRU cache of server verdicts, keyed by `(sql, dialect)`. Dropped whole
- * when a response reports a different `ruleset_version`.
+ * Small TTL + LRU cache of server verdicts, keyed by `(sql, dialect, scope)`, `scope`
+ * being the declared `context` and `end_user`. Dropped whole when a response reports a
+ * different `ruleset_version`.
  */
 class VerdictCache {
   readonly #ttl: number;
@@ -217,8 +254,8 @@ class VerdictCache {
     this.#size = size;
   }
 
-  get(sql: string, dialect: string): Verdict | undefined {
-    const key = `${dialect}\u0000${sql}`;
+  get(sql: string, dialect: string, scope: string): Verdict | undefined {
+    const key = `${dialect}\u0000${scope}\u0000${sql}`;
     const item = this.#items.get(key);
     if (!item) return undefined;
     if (Date.now() - item.at > this.#ttl) {
@@ -230,13 +267,13 @@ class VerdictCache {
     return { ...item.verdict, cached: true };
   }
 
-  put(verdict: Verdict): void {
+  put(verdict: Verdict, scope: string): void {
     if (verdict.decision === 'UNEVALUATED') return;
     if (verdict.rulesetVersion && verdict.rulesetVersion !== this.#ruleset) {
       if (this.#ruleset !== undefined) this.#items.clear();
       this.#ruleset = verdict.rulesetVersion;
     }
-    const key = `${verdict.dialect}\u0000${verdict.sql}`;
+    const key = `${verdict.dialect}\u0000${scope}\u0000${verdict.sql}`;
     this.#items.delete(key);
     this.#items.set(key, { at: Date.now(), verdict });
     while (this.#items.size > this.#size) {

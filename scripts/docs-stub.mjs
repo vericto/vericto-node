@@ -23,6 +23,10 @@
  * RATE_LIMIT_EXCEEDED), `/quota` (429 QUOTA_EXCEEDED). Nothing is persisted, no key is
  * checked beyond its `vtro_` prefix.
  *
+ * `context` (ticket, tenant) and `end_user` are validated with the service's limits
+ * (as with business policies enabled: 400 VALIDATION_ERROR for an invalid value) and
+ * recorded in `requests`; they do not change the decision.
+ *
  *   node scripts/docs-stub.mjs            # prints the base URL, serves until killed
  */
 import { createServer } from 'node:http';
@@ -140,14 +144,51 @@ const FAILURES = {
   }, { 'Retry-After': '3600' }],
 };
 
+const ATTR_KEY = /^[A-Za-z_][A-Za-z0-9_]{0,62}$/;
+// eslint-disable-next-line no-control-regex
+const CONTROL = /[\u0000-\u001f\u007f]/;
+const printable = (value, max) => typeof value === 'string' && value.length > 0 && value.length <= max && !CONTROL.test(value);
+const isObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/** The validation errors of `context` / `end_user` (vericto-fmw policyContextSchema). */
+export function policyContextErrors(body) {
+  const details = [];
+  if (body.context !== undefined) {
+    if (!isObject(body.context)) details.push({ field: 'context', message: 'Expected object' });
+    else {
+      for (const [key, value] of Object.entries(body.context)) {
+        if (key !== 'ticket' && key !== 'tenant') details.push({ field: 'context', message: `Unrecognized key: ${key}` });
+        else if (!printable(value, 128)) details.push({ field: `context.${key}`, message: '1 to 128 characters, no control characters' });
+      }
+    }
+  }
+  if (body.end_user !== undefined) {
+    if (!isObject(body.end_user)) details.push({ field: 'end_user', message: 'Expected object' });
+    else {
+      const entries = Object.entries(body.end_user);
+      if (entries.length > 16) details.push({ field: 'end_user', message: 'end_user: at most 16 keys' });
+      for (const [key, value] of entries) {
+        if (!ATTR_KEY.test(key)) details.push({ field: 'end_user', message: 'keys are identifiers, at most 63 characters' });
+        else if (!printable(value, 256)) details.push({ field: `end_user.${key}`, message: '1 to 256 characters, no control characters' });
+      }
+    }
+  }
+  return details;
+}
+
 function send(res, status, body, headers = {}) {
   res.writeHead(status, { 'Content-Type': 'application/json', ...headers });
   res.end(JSON.stringify(body));
 }
 
-/** Start the stub on 127.0.0.1 (a free port unless one is given). Resolves `{ url, close }`. */
+/**
+ * Start the stub on 127.0.0.1 (a free port unless one is given). Resolves
+ * `{ url, evaluations, requests, close }`; `requests` records what was evaluated
+ * (query, dialect, context, end_user), never the key.
+ */
 export function startStub({ port = 0 } = {}) {
   let evaluations = 0;
+  const requests = [];
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://stub');
     const [mode, ...rest] = url.pathname.split('/').filter(Boolean);
@@ -176,7 +217,15 @@ export function startStub({ port = 0 } = {}) {
       if (typeof body.query !== 'string' || !body.query || typeof body.database_id !== 'string' || !DIALECTS.some(([id]) => id === body.dialect)) {
         const [s, b] = FAILURES['400']; send(res, s, b); return;
       }
+      const details = policyContextErrors(body);
+      if (details.length) { send(res, 400, { error: { code: 'VALIDATION_ERROR', message: 'Validation failed', details } }); return; }
       evaluations++;
+      requests.push({
+        query: body.query,
+        dialect: body.dialect,
+        ...(body.context !== undefined ? { context: body.context } : {}),
+        ...(body.end_user !== undefined ? { end_user: body.end_user } : {}),
+      });
       const [status, out] = evaluation(body.query);
       send(res, status, out, { 'X-Quota-Limit': 'unlimited', 'X-Quota-Remaining': 'unlimited' });
     });
@@ -187,6 +236,7 @@ export function startStub({ port = 0 } = {}) {
       resolve({
         url: `http://127.0.0.1:${actual}`,
         evaluations: () => evaluations,
+        requests,
         close: () => new Promise((done) => { server.closeAllConnections(); server.close(() => { done(); }); }),
       });
     });

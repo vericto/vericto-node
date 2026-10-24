@@ -14,7 +14,7 @@ Prisma API, but not one `@vericto/sdk` controls: pin your Prisma version and re-
 tests when you upgrade it. For PostgreSQL and MySQL the Vericto **TCP proxy** needs no
 code (point `DATABASE_URL` at it) and is the more durable choice there.
 
-Tested with: Node.js 25.8.0 (CI: Node.js 22), `@vericto/sdk` 0.3.1, `prisma` and
+Tested with: Node.js 25.8.0 (CI: Node.js 22), `@vericto/sdk` 0.4.0, `prisma` and
 `@prisma/client` 7.10.1, `@prisma/adapter-better-sqlite3` 7.10.1 (SQLite). Not tested
 with the other adapters; the wrapper does not depend on which one it wraps.
 

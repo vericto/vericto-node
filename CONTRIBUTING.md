@@ -58,7 +58,7 @@ under `test/live/` are opt-in and never run in CI (see the README,
    ```bash
    npm ci
    npm run lint
-   npm run typecheck
+   npm run typecheck    # also compiles the type tests in test/types/
    npm run test:coverage
    npm run build
    npm run smoke

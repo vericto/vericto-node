@@ -5,7 +5,7 @@
 through a Vericto-guarded driver, so every query the model writes is checked before the
 database sees it, and a block goes back to the model as the tool output.
 
-Tested with: Node.js 25.8.0 (CI: Node.js 22), `@vericto/sdk` 0.3.1, `@openai/agents`
+Tested with: Node.js 25.8.0 (CI: Node.js 22), `@vericto/sdk` 0.4.0, `@openai/agents`
 0.21.0, `zod` 4.6.7, `better-sqlite3` 13.0.3. The example invokes the tool the way the
 runner does (`tool.invoke`), without a model.
 

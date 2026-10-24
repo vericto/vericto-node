@@ -24,6 +24,8 @@ export interface Recorded {
   query: string;
   dialect: string;
   database_id: string;
+  context?: Record<string, unknown>;
+  end_user?: Record<string, unknown>;
   headers: IncomingHttpHeaders;
 }
 

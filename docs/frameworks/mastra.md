@@ -5,7 +5,7 @@ pattern: the SQL tool you give the agent (`createTool`) runs its query through a
 Vericto-guarded driver, so every query the model writes is checked before the database
 sees it, and a block goes back to the model as the tool result.
 
-Tested with: Node.js 25.8.0 (CI: Node.js 22), `@vericto/sdk` 0.3.1, `@mastra/core`
+Tested with: Node.js 25.8.0 (CI: Node.js 22), `@vericto/sdk` 0.4.0, `@mastra/core`
 1.79.0, `zod` 4.6.7, `better-sqlite3` 13.0.3. The published example calls the tool body
 directly (no model); an `agent.generate()` run with a scripted AI SDK test model was also
 checked by hand, with the same results.

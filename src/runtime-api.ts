@@ -9,6 +9,7 @@ import {
   VerictoUnsupportedDialectError,
 } from './errors.js';
 import type { Evaluator } from './evaluator.js';
+import { policyFields, type EvaluationOptions } from './policy-context.js';
 import { verdictFromResponse, type Verdict } from './verdict.js';
 import { VERSION } from './version.js';
 
@@ -150,11 +151,13 @@ export class RuntimeApiEvaluator implements Evaluator {
    * Evaluate one statement. Resolves the verdict (`BLOCKED` included). Rejects with
    * `VerictoUnavailableError` when no verdict came back after the retries (network
    * error, timeout, 5xx, 429 rate limit; `VerictoQuotaExceededError` at once for the
-   * monthly quota) and with `VerictoConfigError` for 400, 401, 403 and other 4xx.
-   * Each attempt, response body included, is bounded by `timeoutMs`.
+   * monthly quota) and with `VerictoConfigError` for 400, 401, 403 and other 4xx, or an
+   * invalid `context` / `endUser`. Each attempt, response body included, is bounded by
+   * `timeoutMs`. `options.context` and `options.endUser` are sent as `context` and
+   * `end_user` (see `policy-context`).
    */
-  async evaluate(sql: string, dialect: string): Promise<Verdict> {
-    const payload = JSON.stringify({ query: sql, database_id: this.databaseId, dialect });
+  async evaluate(sql: string, dialect: string, options?: EvaluationOptions): Promise<Verdict> {
+    const payload = JSON.stringify({ query: sql, database_id: this.databaseId, dialect, ...policyFields(options) });
     let lastError = 'no attempt made';
     let retryAfterMs: number | undefined;
 

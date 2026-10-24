@@ -1,6 +1,6 @@
 {
   "name": "@vericto/sdk",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Official Vericto SDK for Node.js: check every SQL statement with Vericto before it runs. Wrappers for snowflake-sdk and better-sqlite3, LangChain.js SQL agents, and a client for the Vericto Runtime API.",
   "license": "Apache-2.0",
   "author": "Vericto <security@vericto.com>",

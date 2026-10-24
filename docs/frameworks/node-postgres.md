@@ -9,7 +9,7 @@ If you can change the connection string, the Vericto **TCP proxy** protects
 PostgreSQL without any code change and also enforces masks; this pattern is for
 when you cannot, or want the check in the application.
 
-Tested with: Node.js 25.8.0 (CI: Node.js 22), `@vericto/sdk` 0.3.1, `pg` 8.23.1, PostgreSQL 17.
+Tested with: Node.js 25.8.0 (CI: Node.js 22), `@vericto/sdk` 0.4.0, `pg` 8.23.1, PostgreSQL 17.
 
 ## Install
 

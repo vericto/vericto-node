@@ -219,12 +219,28 @@ describe('Vericto guard', () => {
     expect(await guard(stub).enforceAll([], 'postgres')).toEqual([]);
   });
 
-  it('check() resolves a block instead of rejecting, and applies no fail mode', async () => {
+  it('check() resolves a block instead of rejecting', async () => {
     const stub = new StubEvaluator({ 'DROP TABLE t': { decision: 'BLOCKED', rule_code: 'VERICTO-001' } });
     const g = guard(stub, { failMode: 'open' });
     expect((await g.check('DROP TABLE t', 'postgres')).decision).toBe('BLOCKED');
-    const down = guard(new StubEvaluator({}, new VerictoUnavailableError('down')), { failMode: 'open' });
-    await expect(down.check('SELECT 1', 'postgres')).rejects.toBeInstanceOf(VerictoUnavailableError);
+  });
+
+  it('check() applies the fail mode (0.4.0): UNEVALUATED with the reason under open, the error under closed', async () => {
+    const log = recorder();
+    const down = guard(new StubEvaluator({}, new VerictoUnavailableError('down')), { failMode: 'open', logger: log });
+    const verdict = await down.check('SELECT 1', 'PostgreSQL');
+    expect(verdict.decision).toBe('UNEVALUATED');
+    expect(verdict.message).toBe('down');
+    expect(verdict.dialect).toBe('postgres');
+    expect(log.lines).toEqual(['warn vericto: no verdict, check answered UNEVALUATED (failMode=open): down']);
+    const closed = guard(new StubEvaluator({}, new VerictoUnavailableError('down')));
+    await expect(closed.check('SELECT 1', 'postgres')).rejects.toBeInstanceOf(VerictoUnavailableError);
+    for (const failMode of ['open', 'closed'] as const) {
+      const broken = guard(new StubEvaluator({}, new VerictoConfigError('revoked')), { failMode });
+      await expect(broken.check('SELECT 1', 'postgres')).rejects.toBeInstanceOf(VerictoConfigError);
+      const odd = guard(new StubEvaluator({}, new RangeError('bug')), { failMode });
+      await expect(odd.check('SELECT 1', 'postgres')).rejects.toBeInstanceOf(RangeError);
+    }
   });
 
   it('sends empty and multi-statement SQL as written, in one evaluation', async () => {

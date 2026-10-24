@@ -397,3 +397,81 @@ describe('guardDataSource and construction options', () => {
     );
   });
 });
+
+describe('0.4.0: the fail-mode contract and the declared context', () => {
+  const down = () => {
+    for (let i = 0; i < 3; i++) fake.queue.push({ status: 503, body: { error: { code: 'INTERNAL_ERROR' } } });
+  };
+
+  it("VerictoCheckSqlTool under failMode 'open' answers UNEVALUATED with the reason", async () => {
+    down();
+    const tool = new VerictoCheckSqlTool({ vericto: fake.guard({ failMode: 'open' }), dialect: 'sqlite' });
+    const answer = (await tool.invoke('DELETE FROM users')) as string;
+    expect(answer).toMatch(/^Vericto: UNEVALUATED\. Vericto could not evaluate the query \(.*HTTP 503.*\)\.$/);
+    expect(answer).not.toContain('ALLOWED');
+  });
+
+  it("VerictoCheckSqlTool under failMode 'closed' rejects, never answers the model", async () => {
+    down();
+    const tool = new VerictoCheckSqlTool({ vericto: fake.guard(), dialect: 'sqlite' });
+    await expect(tool.invoke('SELECT 1')).rejects.toBeInstanceOf(VerictoUnavailableError);
+  });
+
+  it("the query tools run the query unevaluated under failMode 'open'", async () => {
+    const emit = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
+    try {
+      const db = await VerictoSqlDatabase.fromDataSourceParams({ appDataSource: ds, vericto: fake.guard({ failMode: 'open' }) });
+      down();
+      expect(JSON.parse(await new VerictoQuerySqlTool(db).invoke('SELECT id FROM users ORDER BY id') as string)).toEqual([
+        { id: 1 },
+        { id: 2 },
+      ]);
+      expect(emit).toHaveBeenCalledOnce();
+    } finally {
+      emit.mockRestore();
+    }
+  });
+
+  it('describeVerdict never calls an UNEVALUATED verdict allowed', () => {
+    const text = describeVerdict({ ...verdictFromResponse({ decision: 'ALLOWED' }, 'SELECT 1', 'sqlite'), decision: 'UNEVALUATED', message: 'down' });
+    expect(text).toBe('Vericto: UNEVALUATED. Vericto could not evaluate the query (down).');
+  });
+
+  it('context and endUser go with every statement of the database and the check tool', async () => {
+    const db = await VerictoSqlDatabase.fromDataSourceParams({
+      appDataSource: ds,
+      vericto: fake.guard(),
+      context: { ticket: 'CHG-1' },
+      endUser: { id: 'u_1' },
+    });
+    await db.run('SELECT id FROM users WHERE id = 1');
+    expect(fake.requests.at(-1)).toMatchObject({ context: { ticket: 'CHG-1' }, end_user: { id: 'u_1' } });
+    await new VerictoCheckSqlTool({ db }).invoke('SELECT 2');
+    expect(fake.requests.at(-1)).toMatchObject({ context: { ticket: 'CHG-1' }, end_user: { id: 'u_1' } });
+    await new VerictoCheckSqlTool({ db, context: { tenant: 'acme' } }).invoke('SELECT 3');
+    expect(fake.requests.at(-1)?.context).toEqual({ tenant: 'acme' });
+  });
+
+  it('a function is read for every statement', async () => {
+    const state: { endUser?: { id: string } } = {};
+    const db = await VerictoSqlDatabase.fromDataSourceParams({ appDataSource: ds, vericto: fake.guard(), endUser: () => state.endUser });
+    await db.run('SELECT 1');
+    expect(fake.requests.at(-1)).not.toHaveProperty('end_user');
+    state.endUser = { id: 'u_2' };
+    await db.run('SELECT 1');
+    expect(fake.requests.at(-1)?.end_user).toEqual({ id: 'u_2' });
+    const guarded = guardDataSource(ds, fake.guard(), 'sqlite', { context: () => ({ tenant: 't1' }) });
+    await guarded.query('SELECT 1');
+    expect(fake.requests.at(-1)?.context).toEqual({ tenant: 't1' });
+  });
+
+  it('invalid fixed values are refused at construction', async () => {
+    await expect(
+      VerictoSqlDatabase.fromDataSourceParams({ appDataSource: ds, vericto: fake.guard(), context: { ticket: '' } }),
+    ).rejects.toThrow(/context\.ticket/);
+    expect(() => new VerictoCheckSqlTool({ vericto: fake.guard(), dialect: 'sqlite', endUser: { 'bad key': 'x' } })).toThrow(
+      VerictoConfigError,
+    );
+    expect(() => guardDataSource(ds, fake.guard(), 'sqlite', { context: { other: 'x' } as never })).toThrow(/unknown key/);
+  });
+});

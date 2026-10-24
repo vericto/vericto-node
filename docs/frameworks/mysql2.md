@@ -8,7 +8,7 @@ it returns (the masked rewrite, when there is one).
 For MySQL the Vericto **TCP proxy** protects every connection without code changes
 (and enforces masks); use this pattern when you cannot point the connection at it.
 
-Tested with: Node.js 25.8.0 (CI: Node.js 22), `@vericto/sdk` 0.3.1, `mysql2` 3.24.6,
+Tested with: Node.js 25.8.0 (CI: Node.js 22), `@vericto/sdk` 0.4.0, `mysql2` 3.24.6,
 MySQL 8.4.
 
 ## Install
