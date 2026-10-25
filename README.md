@@ -1,4 +1,4 @@
-Official Vericto SDK for Node.js: check SQL before it runs (snowflake-sdk, better-sqlite3, LangChain.js SQL agents and chains, and any driver through the Runtime API client).
+Official Vericto SDK for Node.js: database guardrails for AI agents. Check SQL before it runs (snowflake-sdk, better-sqlite3, LangChain.js SQL agents and chains, and any driver through the Runtime API client).
 
 # @vericto/sdk
 
@@ -7,9 +7,11 @@ Official Vericto SDK for Node.js: check SQL before it runs (snowflake-sdk, bette
 > integration for SQL agents, and a client for the Vericto Runtime API you can put
 > in front of any driver.
 
-Vericto is a deterministic SQL firewall: it parses each statement into an AST and
-evaluates it against your workspace's rules (destructive statements, missing
-`WHERE`/`LIMIT`, risky DDL, data exposure, sensitive columns, agent allowlists).
+Vericto puts database guardrails between AI agents and your database: it parses
+each statement into an AST and evaluates it against your workspace's rules
+(destructive statements, missing `WHERE`/`LIMIT`, risky DDL, data exposure,
+sensitive columns, agent allowlists). Deterministic: same statement, same rules,
+same verdict.
 This package checks SQL before your driver runs it: blocked statements reject
 before they reach the database, flagged ones run and are reported, and statements
 that read masked columns run as the masked rewrite Vericto returns.
@@ -677,7 +679,8 @@ under its own [terms](https://vericto.com/terms).
 
 ## En español
 
-`@vericto/sdk` valida cada sentencia SQL con Vericto **antes** de ejecutarla:
+Guardrails de base de datos para agentes de IA: `@vericto/sdk` valida cada sentencia
+SQL con Vericto **antes** de ejecutarla:
 wrappers para `snowflake-sdk` y `better-sqlite3`, una integración oficial con
 LangChain.js (`@vericto/sdk/langchain`) y un cliente de la Runtime API para cualquier
 otro driver. Toda la API es asíncrona: cada validación es una llamada de red.

@@ -6,6 +6,20 @@ All notable changes to this package are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-24
+
+Documentation and package metadata release. No behavior change.
+
+### Changed
+
+- README and package description now use Vericto's category line, "database
+  guardrails for AI agents" ("guardrails de base de datos para agentes de IA" in
+  the Spanish section), instead of "deterministic SQL firewall". Determinism is
+  stated as the proof: same statement, same rules, same verdict. "SQL firewall"
+  remains the name of the blocking feature.
+- Package keywords: added `guardrails`, `database-guardrails` and
+  `ai-guardrails`; existing keywords are kept.
+
 ## [0.4.0] - 2026-10-23
 
 One fail-open contract for both SDKs (shared with vericto-python 0.5.0), the
@@ -276,6 +290,7 @@ the Vericto Runtime API (`POST /api/v1/proxy/query`).
   `guardDatabase()` rejects with `VerictoUnsupportedDialectError` until the server
   lists it.
 
+[0.4.1]: https://github.com/vericto/vericto-node/releases/tag/v0.4.1
 [0.4.0]: https://github.com/vericto/vericto-node/releases/tag/v0.4.0
 [0.3.1]: https://github.com/vericto/vericto-node/releases/tag/v0.3.1
 [0.2.2]: https://github.com/vericto/vericto-node/releases/tag/v0.2.2
