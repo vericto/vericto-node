@@ -164,8 +164,8 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
-    "@langchain/classic": "1.0.55",
-    "@langchain/core": "1.3.0",
+    "@langchain/classic": "1.0.57",
+    "@langchain/core": "1.3.1",
     "@mastra/core": "1.81.0",
     "@openai/agents": "0.21.0",
     "@types/better-sqlite3": "7.6.13",
@@ -177,7 +177,7 @@
     "tsup": "9.0.0",
     "typeorm": "1.1.2",
     "typescript": "5.9.3",
-    "typescript-eslint": "8.72.0",
+    "typescript-eslint": "8.72.1",
     "vitest": "5.0.5",
     "zod": "4.6.7"
   },
