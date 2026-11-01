@@ -43,12 +43,16 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
-      # npm test with V8 coverage; fails under 80% (vitest.config.ts). Includes
-      # test/langchain.test.ts (pinned @langchain/classic, @langchain/core, typeorm).
+      # npm test with V8 coverage; fails under 80% (vitest.config.ts). Includes the
+      # framework tests with their pinned versions: test/langchain.test.ts
+      # (@langchain/classic, @langchain/core, typeorm), test/ai.test.ts (ai),
+      # test/openai-agents.test.ts (@openai/agents), test/mastra.test.ts (@mastra/core).
+      # compat.yml runs them weekly against the latest releases.
       - run: npm run test:coverage
       - run: npm run build
-      # The README's and the LangChain.js guide's TypeScript examples, type-checked and
-      # run against a local Runtime API stand-in (scripts/docs-stub.mjs): no key, no network.
+      # The TypeScript examples of the README and of the official integration guides
+      # (LangChain.js, Vercel AI SDK, OpenAI Agents SDK, Mastra), type-checked and run
+      # against a local Runtime API stand-in (scripts/docs-stub.mjs): no key, no network.
       - run: npm run docs:check
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: matrix.node == '24'

@@ -39,14 +39,14 @@ import type { BaseLanguageModelInterface } from '@langchain/core/language_models
 import { Tool } from '@langchain/core/tools';
 import type { DataSource } from 'typeorm';
 
+import { blockedMessage, checkOnBlock, type OnBlock } from './agent-tool.js';
 import { normalizeDialect } from './dialects.js';
 import { VerictoBlockedError, VerictoConfigError, VerictoError } from './errors.js';
 import { Vericto } from './guard.js';
 import { policyFields, resolveSource, type EndUser, type PolicyContext, type Source } from './policy-context.js';
 import { isMasked, sqlToExecute, type Verdict } from './verdict.js';
 
-/** What a blocked query does: `return` a message for the model (default), or `raise`. */
-export type OnBlock = 'return' | 'raise';
+export { blockedMessage, type OnBlock } from './agent-tool.js';
 
 export interface VerictoLangChainOptions {
   /** The guard. Default: one built from the `VERICTO_*` environment variables. */
@@ -137,23 +137,6 @@ export function guardDataSource(
   });
 }
 
-/** The message a model gets for a blocked query: what was blocked, why, and the fix. */
-export function blockedMessage(verdict: Verdict): string {
-  const lines = ['Vericto blocked this SQL query; it was NOT executed.'];
-  const rule = verdict.ruleCode ?? 'a Vericto rule';
-  lines.push(`Rule: ${rule}${verdict.severity ? ` (severity ${verdict.severity})` : ''}`);
-  if (verdict.message) lines.push(`Reason: ${verdict.message}`);
-  const denied = verdict.accessDenied.length ? JSON.stringify(verdict.accessDenied) : undefined;
-  if (denied) lines.push(`Access denied: ${denied}`);
-  if (verdict.suggestedFix) {
-    lines.push(`Suggested fix: ${verdict.suggestedFix}`);
-    lines.push('Use the suggested fix, or rewrite the query so that it complies with the rule, and try again.');
-  } else {
-    lines.push('Rewrite the query so that it complies with the rule, and try again. Do not retry the same query.');
-  }
-  return lines.join('\n');
-}
-
 /** A readable verdict for the check tool. */
 export function describeVerdict(verdict: Verdict): string {
   if (verdict.decision === 'BLOCKED') return blockedMessage(verdict).replace('; it was NOT executed.', '.');
@@ -179,15 +162,6 @@ export function describeVerdict(verdict: Verdict): string {
     text += `\nIt reads sensitive columns, so it will run masked, as: ${sqlToExecute(verdict)}`;
   }
   return text;
-}
-
-function checkOnBlock(onBlock: OnBlock | undefined): OnBlock {
-  // Checked at run time too: plain-JS callers get no type error.
-  const value: string = onBlock ?? 'return';
-  if (value !== 'return' && value !== 'raise') {
-    throw new VerictoConfigError(`onBlock must be 'return' or 'raise', got ${JSON.stringify(value)}.`);
-  }
-  return value;
 }
 
 /**

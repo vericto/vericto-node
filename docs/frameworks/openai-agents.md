@@ -1,80 +1,133 @@
 # OpenAI Agents SDK (JavaScript)
 
-**Status: documented pattern.** There is no OpenAI Agents SDK integration in
-`@vericto/sdk`. The pattern: the SQL function tool you give the agent runs its query
-through a Vericto-guarded driver, so every query the model writes is checked before the
-database sees it, and a block goes back to the model as the tool output.
+**Status: official, `@vericto/sdk/openai-agents`** (since `@vericto/sdk` 0.5.0).
+Database guardrails on the SQL tools an agent calls, two ways:
 
-Tested with: Node.js 25.8.0 (CI: Node.js 22), `@vericto/sdk` 0.4.0, `@openai/agents`
-0.21.0, `zod` 4.6.7, `better-sqlite3` 13.0.3. The example invokes the tool the way the
-runner does (`tool.invoke`), without a model.
+- `sqlTool({ dialect, execute })`: a ready `run_sql` function tool with the whole
+  contract. A block goes back to the model as the tool output (the rule code and the
+  suggested fix); an approved query (masked columns and/or a LIMIT bound) runs instead
+  of the model's.
+- `verictoToolInputGuardrail({ dialect, sqlKey })`: a native **tool input guardrail**
+  for a function tool you already have (`tool({ ..., inputGuardrails: [...] })`). A
+  block is answered with the refusal (`rejectContent`) and your tool does not run.
+
+Tested with: Node.js 25.8.0 (CI: Node.js 22 and 24), `@openai/agents` 0.21.0 (unit
+tests also with 0.18.0), `zod` 4.6.7, `better-sqlite3` 13.0.3. The example runs a real `Agent` with a
+scripted `Model`, so no model is called and no OpenAI key is needed.
 
 ## Install
 
 ```bash
-npm install @vericto/sdk @openai/agents zod better-sqlite3
+npm install @vericto/sdk @openai/agents zod
 ```
+
+`@openai/agents` is an optional peer dependency (`>=0.18 <1`): only
+`@vericto/sdk/openai-agents` loads it.
 
 ## Example
 
 ```ts
 import Database from 'better-sqlite3';
-import { Agent, RunContext, tool } from '@openai/agents';
+import { Agent, Usage, run, setTracingDisabled, tool, type Model, type ModelResponse } from '@openai/agents';
 import { z } from 'zod';
-import { VerictoBlockedError } from '@vericto/sdk';
-import { guardDatabase } from '@vericto/sdk/better-sqlite3';
+import { sqlTool, verictoErrorOf, verictoToolInputGuardrail } from '@vericto/sdk/openai-agents';
 
-const db = await guardDatabase(new Database(':memory:')); // reads VERICTO_* from the environment
-await db.exec('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT)');
-await db.run('INSERT INTO users VALUES (?, ?)', 1, 'ada@example.com');
+setTracingDisabled(true); // this example has no OpenAI key
 
-export const runSql = tool({
-  name: 'run_sql',
-  description: 'Run one SQL query against the application database (SQLite).',
-  parameters: z.object({ sql: z.string() }),
-  execute: async ({ sql }) => {
-    try {
-      return JSON.stringify(await db.all(sql));
-    } catch (err) {
-      // A block goes back to the model, with the rule and the fix, so it can rewrite it.
-      if (!(err instanceof VerictoBlockedError)) throw err;
-      return err.message;
-    }
-  },
-  // Without this, the SDK turns any thrown error into "An error occurred while running
-  // the tool" for the model, and "Vericto unavailable" would never reach your code.
-  errorFunction: null,
+const db = new Database(':memory:');
+db.exec('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT)');
+db.prepare('INSERT INTO users VALUES (?, ?)').run(1, 'ada@example.com');
+
+// 1. A ready tool (reads VERICTO_* from the environment): `execute` gets the approved SQL.
+const runSql = sqlTool({ dialect: 'sqlite', execute: (sql) => db.prepare(sql).all() });
+
+// 2. Your own tool, guarded by a tool input guardrail on its `query` argument.
+const queryDb = tool({
+  name: 'query_db',
+  description: 'Run one SQL query with bind parameters (SQLite).',
+  parameters: z.object({ query: z.string(), params: z.array(z.union([z.string(), z.number()])) }),
+  execute: async ({ query, params }) => JSON.stringify(db.prepare(query).all(...params)),
+  inputGuardrails: [verictoToolInputGuardrail({ dialect: 'sqlite', sqlKey: 'query' })],
 });
 
-export const agent = new Agent({
+// A scripted model stands in for your provider's model: four tool calls, then an answer.
+const calls = [
+  { name: 'run_sql', args: { sql: 'SELECT id, email FROM users' } },
+  { name: 'run_sql', args: { sql: 'DELETE FROM users' } },
+  { name: 'query_db', args: { query: 'SELECT id FROM users WHERE id = ?', params: [1] } },
+  { name: 'query_db', args: { query: 'DELETE FROM users', params: [] } },
+];
+const model: Model = {
+  async getResponse(): Promise<ModelResponse> {
+    const call = calls.shift();
+    return {
+      usage: new Usage(),
+      output: call
+        ? [{ type: 'function_call', callId: `call-${calls.length}`, name: call.name, arguments: JSON.stringify(call.args), status: 'completed' }]
+        : [{ type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'Done.' }] }],
+    };
+  },
+  getStreamedResponse: () => { throw new Error('not used'); },
+};
+
+const agent = new Agent({
   name: 'SQL agent',
   instructions: 'Answer questions with SQL. If a query is blocked, follow the suggested fix.',
-  tools: [runSql],
+  model,
+  tools: [runSql, queryDb],
 });
 
-// What the agent gets back when the model calls the tool (no model is called here):
-const context = new RunContext();
-console.log(await runSql.invoke(context, JSON.stringify({ sql: 'SELECT id, email FROM users' })));
-console.log(await runSql.invoke(context, JSON.stringify({ sql: 'DELETE FROM users' })));
+try {
+  const result = await run(agent, 'Clean up the users table');
+  for (const item of result.newItems) {
+    if (item.type !== 'tool_call_output_item') continue;
+    const out = typeof item.output === 'string' ? JSON.parse(item.output) : item.output;
+    console.log(out.decision === 'BLOCKED' ? `BLOCKED ${out.rule_code}: ${out.suggested_fix}` : JSON.stringify(out));
+  }
+} catch (err) {
+  // Fail closed: Vericto unavailable or misconfigured rejects the run; nothing ran.
+  const vericto = verictoErrorOf(err);
+  if (vericto) console.error('Vericto:', vericto.message);
+  throw err;
+}
 ```
 
 With the documentation stub (it masks `email` and blocks a `DELETE` without `WHERE`):
 
 <!-- docs-check: output -->
 ```text
-[{"id":1,"email":"***"}]
-Query blocked by VERICTO-001 (severity critical). Suggested fix: DELETE FROM users WHERE <condition>
+{"result":[{"id":1,"email":"***"}],"vericto":{"decision":"FLAGGED","rule_code":"VERICTO-085","severity":"low","approved_query":"SELECT id, '***' AS email FROM users","note":null}}
+BLOCKED VERICTO-001: DELETE FROM users WHERE <condition>
+[{"id":1}]
+BLOCKED VERICTO-001: DELETE FROM users WHERE <condition>
 ```
 
-`await run(agent, 'How many users signed up this week?')` runs it with a model.
+In your application, leave `model` out (or name one) and keep your OpenAI key in the
+environment; nothing else changes.
 
 ## What each verdict does
 
-| Verdict | What the model sees |
-|---|---|
-| `ALLOWED`, `FLAGGED`, `MONITORED` | The rows (flagged and monitored queries are logged and passed to `onVerdict`). |
-| mask | The rows of the masked rewrite. |
-| `BLOCKED` | `Query blocked by ... Suggested fix: ...`; nothing ran. |
-| no verdict, config error | With `errorFunction: null`, the tool throws `VerictoUnavailableError` / `VerictoConfigError` and the run rejects; nothing runs. With the default `errorFunction`, nothing runs either, but the model only gets a generic error text and your code sees no exception. |
+| Verdict | `sqlTool` | `verictoToolInputGuardrail` |
+|---|---|---|
+| `ALLOWED` | `{ result, vericto: { decision: 'ALLOWED', ... } }` | `allow`: your tool runs. |
+| `FLAGGED` / `MONITORED` | Runs; reported in `vericto`; the guard logs it and calls `onVerdict`. | `allow`, with the verdict as the guardrail's `outputInfo`; the guard logs it. |
+| approved query | Runs the approved query **instead of** the model's (`vericto.approved_query`). | A guardrail cannot change the tool's input: `rejectContent` with `approved_query` and "run only this approved query instead" (as MCP `check_sql` answers); the approved query is then let through. `sqlTool` saves that round trip. |
+| `BLOCKED` | The refusal `{ decision: 'BLOCKED', executed: false, rule_code, severity, reason, suggested_fix, access_denied, event_id, message }`. | `rejectContent` with the same refusal as JSON; your tool does not run. |
+| `onBlock: 'raise'` | The run rejects with `VerictoBlockedError`. | The same. |
+| no verdict, `failMode: 'closed'` (default) | The run rejects with `VerictoUnavailableError` (inside the runner's `ToolCallError`: `verictoErrorOf(err)` finds it); nothing runs. `sqlTool` never hands Vericto errors to `errorFunction`. | The same. |
+| no verdict, `failMode: 'open'` | Runs unevaluated: `vericto.decision` is `UNEVALUATED`, with the reason. | `allow`. |
+| configuration error | Rejects with `VerictoConfigError` in both modes. | The same. |
+
+## Options
+
+| Option | Default | |
+|---|---|---|
+| `dialect` | required | `postgres`, `mysql`, `oracle`, `mssql`, `snowflake`, `sqlite` (driver names such as `pg` are accepted). |
+| `vericto` | `new Vericto()` from `VERICTO_*` | The guard: fail mode, verdict cache (`cacheTtlMs`), logger, `onVerdict`. |
+| `onBlock` | `'return'` | `'raise'` rejects the run with `VerictoBlockedError`. |
+| `context`, `endUser` | none | The business policy context: a value, or a function read for every call. `sqlTool` passes it `(input, runContext)`; the guardrail `(args, data)`, `data.context` being the `RunContext`. |
+| `sqlKey` (guardrail) | `'sql'` | The argument that holds the SQL text. |
+| `name` | `run_sql` / `vericto` | The tool name / the guardrail name. |
+| `description`, `errorFunction` (`sqlTool`) | | What the model reads; what it gets when `execute` throws something other than a Vericto error. |
 
 Each query the model writes is one Runtime API evaluation.

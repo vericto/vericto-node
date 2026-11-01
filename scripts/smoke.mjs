@@ -3,7 +3,8 @@
 
 // Smoke test of the BUILT package (dist/), ESM and CJS, on any Node >= 18, with no
 // dev dependencies: a local stand-in API, one allowed and one blocked statement
-// through the snowflake entry point, and the error class identity across entries.
+// through the snowflake entry point, the error class identity across entries, and no
+// framework entry leaking into another.
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import assert from 'node:assert/strict';
@@ -55,13 +56,22 @@ async function run(core, snowflake, label) {
   console.log(`${label}: ok (${core.VERSION})`);
 }
 
-// The LangChain entry is opt-in: nothing but dist/langchain.* may load its peers, so
-// the root and driver entries work without @langchain/* or typeorm installed (this
+// The framework entries are opt-in: only dist/<entry>.* may load that framework, so
+// the root, the driver entries and every other framework entry work without it (this
 // job runs with no node_modules at all).
+const FRAMEWORKS = {
+  langchain: /@langchain\/|typeorm/,
+  ai: /from ["']ai["']|require\(["']ai["']\)/,
+  'openai-agents': /@openai\/agents/,
+  mastra: /@mastra\//,
+};
 for (const file of readdirSync(new URL('../dist/', import.meta.url))) {
-  if (!/\.(c?js)$/.test(file) || file.startsWith('langchain.')) continue;
+  if (!/\.(c?js)$/.test(file)) continue;
   const code = readFileSync(new URL(`../dist/${file}`, import.meta.url), 'utf8');
-  assert.ok(!/@langchain\/|typeorm/.test(code), `${file} references an optional LangChain peer`);
+  for (const [entry, pattern] of Object.entries(FRAMEWORKS)) {
+    if (file.startsWith(`${entry}.`)) continue;
+    assert.ok(!pattern.test(code), `${file} references the optional ${entry} peer`);
+  }
 }
 
 try {

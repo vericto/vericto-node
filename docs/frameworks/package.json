@@ -1,24 +1,20 @@
 {
   "name": "vericto-node-framework-guides",
   "private": true,
-  "description": "The frameworks the guides in this directory were tested with (scripts/check-docs-examples.mjs frameworks). Not published.",
+  "description": "The frameworks the pattern guides in this directory were tested with (scripts/check-docs-examples.mjs frameworks). Not published. The guides of the official integrations (LangChain.js, Vercel AI SDK, OpenAI Agents SDK, Mastra) run with the package's own devDependencies.",
   "license": "Apache-2.0",
   "type": "module",
   "dependencies": {
-    "@mastra/core": "1.79.0",
-    "@openai/agents": "0.21.0",
     "@prisma/adapter-better-sqlite3": "7.10.1",
     "@prisma/client": "7.10.1",
     "@prisma/driver-adapter-utils": "7.10.1",
     "@vericto/sdk": "file:../..",
-    "ai": "7.0.152",
     "better-sqlite3": "13.0.3",
     "drizzle-orm": "0.45.4",
     "knex": "3.3.0",
     "mysql2": "3.24.6",
     "pg": "8.23.1",
-    "prisma": "7.10.1",
-    "zod": "4.6.7"
+    "prisma": "7.10.1"
   },
   "devDependencies": {
     "@types/better-sqlite3": "7.6.13",

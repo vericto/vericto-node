@@ -1,0 +1,45 @@
+# Weekly compatibility check of the agent-framework entry points against the latest
+# releases inside their peer ranges: @vericto/sdk/ai (ai 7.x),
+# @vericto/sdk/openai-agents (@openai/agents 0.x) and @vericto/sdk/mastra
+# (@mastra/core 1.x). CI pins the versions in package.json; this job installs the
+# newest ones (without saving them) and runs the adapters' tests, so a framework
+# release that breaks an adapter shows up within a week, before a user reports it.
+#
+# One job, one Node version, a few minutes a week. Runners as in ci.yml.
+name: Framework compatibility
+
+on:
+  schedule:
+    - cron: "17 6 * * 1" # Mondays 06:17 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: compat-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  latest:
+    name: Adapters with the latest ai, @openai/agents and @mastra/core
+    runs-on: ${{ github.event.repository.private && fromJSON(vars.CI_RUNS_ON || '["self-hosted","linux","x64","vericto-spot"]') || fromJSON(vars.CI_RUNS_ON_PUBLIC || '"ubuntu-latest"') }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - name: Install the latest framework releases in the peer ranges
+        run: npm install --no-save --no-audit --no-fund 'ai@^7' '@openai/agents@<1' '@mastra/core@^1'
+      - name: Versions under test
+        run: |
+          for p in ai @openai/agents @mastra/core zod; do echo "$p $(node -p "require('./node_modules/$p/package.json').version")"; done
+      - run: npm run typecheck
+      - run: npx vitest run test/agent-tool.test.ts test/ai.test.ts test/openai-agents.test.ts test/mastra.test.ts
+      - run: npm run build
+      - run: npm run docs:check
