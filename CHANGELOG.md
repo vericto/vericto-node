@@ -6,6 +6,61 @@ All notable changes to this package are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-31
+
+First-class adapters for three agent frameworks: the Vercel AI SDK, the OpenAI Agents
+SDK and Mastra had documented patterns until now; they get typed, tested entry points,
+as LangChain.js has. No change to the core API or to the existing entry points.
+
+### Added
+
+- **`@vericto/sdk/ai`** (Vercel AI SDK, `ai` 7): `sqlTool({ dialect, execute })`
+  builds a SQL `tool()` whose input is `{ sql }`; `guardSqlTool(tool, { dialect,
+  sqlKey })` guards a tool you already have (its input field `sqlKey`, default `sql`,
+  is checked before its `execute` runs; the other fields, such as bind parameters, are
+  passed as they are); `throwOnVerictoError(result)` throws a Vericto error that the
+  AI SDK handed to the model as a `tool-error` part.
+- **`@vericto/sdk/openai-agents`** (OpenAI Agents SDK, `@openai/agents`): `sqlTool`
+  builds a `run_sql` function tool; `verictoToolInputGuardrail({ dialect, sqlKey })` is
+  a native tool input guardrail for a function tool you already have. `sqlTool`'s
+  `errorFunction` never turns a Vericto error into text for the model.
+- **`@vericto/sdk/mastra`** (Mastra, `@mastra/core` 1): `sqlTool` builds a `run-sql`
+  tool (`createTool`); `guardSqlTool(tool, { dialect, sqlKey })` guards a Mastra tool
+  you already have (a copy of the same class, id and schemas).
+- One contract in the three, on top of `Vericto.enforce` (fail mode, verdict cache,
+  logger and `onVerdict` unchanged): a `BLOCKED` query returns a structured refusal to
+  the model, `{ decision: 'BLOCKED', executed: false, rule_code, severity, reason,
+  suggested_fix, access_denied, event_id, message }`, and the SQL never runs
+  (`onBlock: 'raise'` throws `VerictoBlockedError` instead); `FLAGGED` and `MONITORED`
+  queries run and are reported (`sqlTool` results carry `vericto: { decision,
+  rule_code, severity, approved_query, note }`); an approved query (masked columns
+  and/or a LIMIT bound, `approved_query` in the MCP contract) runs instead of the
+  model's, never the original; with no verdict, `failMode: 'closed'` (default) throws
+  `VerictoUnavailableError` and nothing runs, `'open'` runs the query unevaluated
+  (`UNEVALUATED`). `context` and `endUser` take a value or a function of the tool input
+  and the framework's call context. The OpenAI guardrail cannot change the tool's
+  input: it rejects a query that has an approved query with that query for the model
+  to run instead (as MCP `check_sql` answers), and lets the approved query through.
+- Shared by the three: `isVerictoRefusal(value)`, `verictoErrorOf(error)` (finds the
+  Vericto error inside a framework's wrapper: `ToolCallError.error`, `error.cause`),
+  and the types `VerictoRefusal`, `VerictoReport`, `OnBlock`, `CallSource`.
+- `ai` (`>=7 <8`), `@openai/agents` (`>=0.18 <1`) and `@mastra/core` (`>=1 <2`) are
+  optional peer dependencies; only their entry points load them (the smoke test checks
+  that no other built file references them).
+- Runnable examples: `examples/vercel-ai-sdk.ts`, `examples/openai-agents.ts`,
+  `examples/mastra.ts`.
+- CI: `compat.yml`, a weekly job that runs the adapters' tests and the guides against
+  the latest releases inside the peer ranges.
+
+### Changed
+
+- The Vercel AI SDK, OpenAI Agents SDK and Mastra guides (`docs/frameworks/`) use the
+  new entry points; their examples run a real agent loop with a scripted model in the
+  core docs check (`npm run docs:check`), with the frameworks as devDependencies of the
+  package. `docs/frameworks/package.json` no longer pins them.
+- LangChain.js: `blockedMessage` and the `OnBlock` type now come from the shared,
+  framework-free module (same exports from `@vericto/sdk/langchain`, same text).
+
 ## [0.4.1] - 2026-10-24
 
 Documentation and package metadata release. No behavior change.
@@ -290,6 +345,7 @@ the Vericto Runtime API (`POST /api/v1/proxy/query`).
   `guardDatabase()` rejects with `VerictoUnsupportedDialectError` until the server
   lists it.
 
+[0.5.0]: https://github.com/vericto/vericto-node/releases/tag/v0.5.0
 [0.4.1]: https://github.com/vericto/vericto-node/releases/tag/v0.4.1
 [0.4.0]: https://github.com/vericto/vericto-node/releases/tag/v0.4.0
 [0.3.1]: https://github.com/vericto/vericto-node/releases/tag/v0.3.1

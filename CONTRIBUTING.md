@@ -19,7 +19,9 @@ statement. Contributions that fit here:
   points with optional peer dependencies.
 - **The Runtime API client** — `src/runtime-api.ts`, retries, fail mode and
   caching (`src/guard.ts`), configuration from `VERICTO_*` (`src/env.ts`).
-- **The LangChain.js integration** — `src/langchain.ts`.
+- **Agent-framework integrations** — `src/langchain.ts` (LangChain.js), `src/ai.ts`
+  (Vercel AI SDK), `src/openai-agents.ts` (OpenAI Agents SDK), `src/mastra.ts`
+  (Mastra), and what they share, `src/agent-tool.ts` (framework-free).
 - **Packaging** — the ESM and CommonJS builds (`tsup.config.ts`), types, the
   Node 18+ runtime promise.
 - **Examples and documentation** — `examples/` and `README.md`.

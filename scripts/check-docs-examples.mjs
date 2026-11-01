@@ -13,7 +13,7 @@
  *   <!-- docs-check: output -->             before the ```text block that follows the code
  *                                           (prose may come between): the expected stdout
  *
- *   node scripts/check-docs-examples.mjs core        # README.md + docs/frameworks/langchain.md
+ *   node scripts/check-docs-examples.mjs core        # README.md + the guides of the official integrations
  *   node scripts/check-docs-examples.mjs frameworks  # the other guides, in docs/frameworks/
  *
  * Needs `npm run build` first (the examples import `@vericto/sdk`, resolved to dist/).
@@ -30,7 +30,7 @@ import { startStub } from './docs-stub.mjs';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const GUIDES = path.join(ROOT, 'docs', 'frameworks');
 // Guides whose frameworks are the package's own devDependencies run in the core suite.
-const CORE_GUIDES = new Set(['langchain.md']);
+const CORE_GUIDES = new Set(['langchain.md', 'vercel-ai-sdk.md', 'openai-agents.md', 'mastra.md']);
 
 const suite = process.argv[2] ?? 'core';
 if (suite !== 'core' && suite !== 'frameworks') {

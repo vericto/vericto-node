@@ -1,11 +1,11 @@
-Official Vericto SDK for Node.js: database guardrails for AI agents. Check SQL before it runs (snowflake-sdk, better-sqlite3, LangChain.js SQL agents and chains, and any driver through the Runtime API client).
+Official Vericto SDK for Node.js: database guardrails for AI agents. Check SQL before it runs (snowflake-sdk, better-sqlite3, SQL tools for the Vercel AI SDK, the OpenAI Agents SDK and Mastra, LangChain.js SQL agents and chains, and any driver through the Runtime API client).
 
 # @vericto/sdk
 
 > Check every SQL statement with [Vericto](https://vericto.com) **before** it runs:
-> thin wrappers for `snowflake-sdk` and `better-sqlite3`, a LangChain.js
-> integration for SQL agents, and a client for the Vericto Runtime API you can put
-> in front of any driver.
+> thin wrappers for `snowflake-sdk` and `better-sqlite3`, guarded SQL tools for the
+> Vercel AI SDK, the OpenAI Agents SDK and Mastra, a LangChain.js integration for SQL
+> agents, and a client for the Vericto Runtime API you can put in front of any driver.
 
 Vericto puts database guardrails between AI agents and your database: it parses
 each statement into an AST and evaluates it against your workspace's rules
@@ -21,8 +21,8 @@ Evaluation happens in your Vericto workspace; nothing is evaluated locally in th
 release (see [Evaluators](#evaluators)).
 
 - TypeScript types, ESM and CommonJS builds, Node.js 18+ (uses the global `fetch`).
-- No runtime dependencies. Drivers and LangChain are optional peer dependencies
-  and separate entry points: importing `@vericto/sdk` never loads them.
+- No runtime dependencies. Drivers and agent frameworks are optional peer
+  dependencies and separate entry points: importing `@vericto/sdk` never loads them.
 - Asynchronous only: a check is a network call, so every API that checks SQL
   returns a promise. There is no synchronous variant.
 
@@ -37,9 +37,9 @@ dbt and Airflow) lives in [vericto-python](https://github.com/vericto/vericto-py
   [Business policy context](#business-policy-context) ·
   [Timeouts and retries](#timeouts-and-retries) · [Errors](#errors)
 - Drivers: [snowflake-sdk](#snowflake-sdk) · [better-sqlite3](#better-sqlite3)
-- [Frameworks](#frameworks): LangChain.js (official), and tested patterns for the
-  Vercel AI SDK, Mastra, the OpenAI Agents SDK, Prisma, Drizzle, Knex, node-postgres
-  and mysql2
+- [Frameworks](#frameworks): the Vercel AI SDK, the OpenAI Agents SDK, Mastra and
+  LangChain.js (official entry points), and tested patterns for Prisma, Drizzle, Knex,
+  node-postgres and mysql2
 - [Caching](#caching) · [SQLite status](#sqlite-status) ·
   [Enforcement boundary](#enforcement-boundary) · [Evaluators](#evaluators) ·
   [Development](#development)
@@ -469,9 +469,9 @@ no package-level integration for the patterns.
 | Framework | Status | Approach | Tested with |
 |---|---|---|---|
 | [LangChain.js](https://github.com/vericto/vericto-node/blob/main/docs/frameworks/langchain.md) | official: `@vericto/sdk/langchain` | `VerictoSqlDatabase` (a `SqlDatabase`), `VerictoSqlToolkit`, `VerictoQuerySqlTool`, `VerictoCheckSqlTool` | `@langchain/classic` 1.0.55, `@langchain/core` 1.3.0, `typeorm` 1.1.2 |
-| [Vercel AI SDK](https://github.com/vericto/vericto-node/blob/main/docs/frameworks/vercel-ai-sdk.md) | pattern | a `tool()` whose `execute` runs the query through a guarded driver | `ai` 7.0.152 |
-| [Mastra](https://github.com/vericto/vericto-node/blob/main/docs/frameworks/mastra.md) | pattern | a `createTool()` tool, same approach | `@mastra/core` 1.79.0 |
-| [OpenAI Agents SDK](https://github.com/vericto/vericto-node/blob/main/docs/frameworks/openai-agents.md) | pattern | a function `tool()`, with `errorFunction: null` so Vericto errors reach your code | `@openai/agents` 0.21.0 |
+| [Vercel AI SDK](https://github.com/vericto/vericto-node/blob/main/docs/frameworks/vercel-ai-sdk.md) | official: `@vericto/sdk/ai` | `sqlTool` (a ready SQL `tool()`), `guardSqlTool` (guards yours), `throwOnVerictoError` | `ai` 7.0.159 |
+| [OpenAI Agents SDK](https://github.com/vericto/vericto-node/blob/main/docs/frameworks/openai-agents.md) | official: `@vericto/sdk/openai-agents` | `sqlTool` (a ready function tool), `verictoToolInputGuardrail` (a tool input guardrail for yours) | `@openai/agents` 0.21.0 |
+| [Mastra](https://github.com/vericto/vericto-node/blob/main/docs/frameworks/mastra.md) | official: `@vericto/sdk/mastra` | `sqlTool` (a ready `createTool()` tool), `guardSqlTool` (guards yours) | `@mastra/core` 1.81.0 |
 | [Prisma ORM](https://github.com/vericto/vericto-node/blob/main/docs/frameworks/prisma.md) | pattern | wrap the driver adapter: model and raw queries are checked | `prisma` / `@prisma/client` 7.10.1 |
 | [Drizzle ORM](https://github.com/vericto/vericto-node/blob/main/docs/frameworks/drizzle.md) | pattern | a guarded `pg` pool | `drizzle-orm` 0.45.4 |
 | [Knex](https://github.com/vericto/vericto-node/blob/main/docs/frameworks/knex.md) | pattern | guard each connection in `pool.afterCreate` | `knex` 3.3.0 |
@@ -496,6 +496,46 @@ back to the model as a message with the rule and the suggested fix (`onBlock:
 'return'`, default) or rejects with `VerictoBlockedError` (`onBlock: 'raise'`); Vericto
 being unavailable or misconfigured is thrown, never handed to the model. The full,
 tested example and the API table are in the [LangChain.js guide](https://github.com/vericto/vericto-node/blob/main/docs/frameworks/langchain.md).
+
+### Agent frameworks in short
+
+`@vericto/sdk/ai`, `@vericto/sdk/openai-agents` and `@vericto/sdk/mastra` each export
+`sqlTool({ dialect, execute })`: a SQL tool for that framework whose input is `{ sql }`.
+Vericto checks each query the model writes; your `execute(sql)` runs the SQL Vericto
+approved. The contract is the same in all three:
+
+- `BLOCKED`: the tool returns a refusal to the model, `{ decision: 'BLOCKED',
+  executed: false, rule_code, severity, reason, suggested_fix, ... }`, and `execute`
+  is not called (`onBlock: 'raise'` throws `VerictoBlockedError` instead).
+- `FLAGGED` / `MONITORED`: the query runs and is reported (`vericto` in the result,
+  the guard's logger and `onVerdict`).
+- an approved query (masked columns and/or a LIMIT bound): it runs **instead of** the
+  model's, and the result says so (`vericto.approved_query`).
+- no verdict: the guard's fail mode. `closed` (default) throws
+  `VerictoUnavailableError` and nothing runs; `open` runs the query unevaluated.
+
+To guard a tool you already have: `guardSqlTool(tool, { dialect, sqlKey })` (AI SDK,
+Mastra), or `verictoToolInputGuardrail({ dialect, sqlKey })` in the tool's
+`inputGuardrails` (OpenAI Agents SDK). Each guide has a tested example with a scripted
+model.
+
+```ts
+import Database from 'better-sqlite3';
+import { sqlTool } from '@vericto/sdk/ai';
+
+const db = new Database(':memory:');
+db.exec('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT)');
+
+// Give it to generateText / streamText as `tools: { runSql }`; here it is called directly.
+const runSql = sqlTool({ dialect: 'sqlite', execute: (sql) => db.prepare(sql).all() });
+const out = await runSql.execute({ sql: 'DELETE FROM users' }, { toolCallId: 'call-1', messages: [], context: {} });
+console.log(JSON.stringify(out).includes('"suggested_fix":"DELETE FROM users WHERE <condition>"'));
+```
+
+<!-- docs-check: output -->
+```text
+true
+```
 
 ## Caching
 
@@ -581,12 +621,13 @@ Not implemented yet; each is meant to be a thin layer over `Vericto.enforce`:
 npm ci
 npm run lint && npm run typecheck
 npm test            # vitest: local Runtime API stand-in, real better-sqlite3, fake snowflake-sdk,
-                    # real LangChain.js + TypeORM with a scripted LLM (no model calls)
+                    # real LangChain.js + TypeORM, AI SDK, OpenAI Agents SDK and Mastra with
+                    # scripted models (no model calls)
 npm run test:coverage  # the same suite with V8 coverage of src/ (what CI runs); fails under 80%
                        # lines, statements, functions or branches. Live tests are excluded.
 npm run build       # tsup → dist/ (ESM + CJS + .d.ts)
 npm run smoke       # the built package, ESM and CJS, on any Node >= 18
-npm run docs:check  # README + LangChain.js guide examples, type-checked and run against the stub
+npm run docs:check  # README + official integration guides, type-checked and run against the stub
 ```
 
 Development needs Node 22+ (the tooling; the docs check uses type stripping, 22.6+);
@@ -602,7 +643,8 @@ the documented response shapes (no key, no network). A block can declare extra
 environment, an expected output (compared exactly), or a skip with its reason, in
 HTML comments (see the script's header). The framework guides run in their own
 project, `docs/frameworks/` (pinned framework versions, not published), against
-PostgreSQL and MySQL:
+PostgreSQL and MySQL (the guides of the official integrations run in the core suite,
+with the package's devDependencies):
 
 ```bash
 npm run build && npm run docs:check                         # core suite
@@ -681,9 +723,10 @@ under its own [terms](https://vericto.com/terms).
 
 Guardrails de base de datos para agentes de IA: `@vericto/sdk` valida cada sentencia
 SQL con Vericto **antes** de ejecutarla:
-wrappers para `snowflake-sdk` y `better-sqlite3`, una integración oficial con
-LangChain.js (`@vericto/sdk/langchain`) y un cliente de la Runtime API para cualquier
-otro driver. Toda la API es asíncrona: cada validación es una llamada de red.
+wrappers para `snowflake-sdk` y `better-sqlite3`, herramientas SQL para el Vercel AI
+SDK (`@vericto/sdk/ai`), el OpenAI Agents SDK (`@vericto/sdk/openai-agents`) y Mastra
+(`@vericto/sdk/mastra`), una integración oficial con LangChain.js
+(`@vericto/sdk/langchain`) y un cliente de la Runtime API para cualquier otro driver. Toda la API es asíncrona: cada validación es una llamada de red.
 
 - **BLOCKED**: rechaza con `VerictoBlockedError` (hallazgos y corrección sugerida) y
   la sentencia no llega a la base de datos.
@@ -705,8 +748,12 @@ Configuración: `VERICTO_API_KEY` (clave `vtro_...` con el scope `proxy:evaluate
 `VERICTO_DATABASE_ID` y, opcionalmente, `VERICTO_API_URL`, `VERICTO_FAIL_MODE`,
 `VERICTO_TIMEOUT`. Los valores de los parámetros nunca se envían a Vericto.
 
-Frameworks: LangChain.js tiene integración oficial. Para el Vercel AI SDK, Mastra, el
-OpenAI Agents SDK, Prisma, Drizzle, Knex, node-postgres y mysql2 hay patrones
+Frameworks: el Vercel AI SDK, el OpenAI Agents SDK, Mastra y LangChain.js tienen
+integración oficial. En los tres primeros, `sqlTool({ dialect, execute })` crea la
+herramienta SQL del framework: si Vericto bloquea la query, el modelo recibe un rechazo
+estructurado (`rule_code`, `suggested_fix`) y la SQL no se ejecuta; si devuelve una
+query aprobada (columnas enmascaradas o un LIMIT), se ejecuta esa en lugar de la
+original. Para Prisma, Drizzle, Knex, node-postgres y mysql2 hay patrones
 documentados y probados (unas pocas líneas propias alrededor de la API pública, no
 una integración del paquete), cada uno con su guía en
 [docs/frameworks](https://github.com/vericto/vericto-node/blob/main/docs/frameworks/README.md) y las versiones con las que se probó. Los

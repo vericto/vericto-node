@@ -9,8 +9,10 @@
  * - `Evaluator` is how a verdict is obtained; `RuntimeApiEvaluator` asks the Vericto
  *   Runtime API.
  *
- * Driver wrappers are separate entry points so that importing this module never
- * loads a driver: `@vericto/sdk/snowflake`, `@vericto/sdk/better-sqlite3` and
+ * Driver wrappers and agent-framework tools are separate entry points so that
+ * importing this module never loads a driver or a framework: `@vericto/sdk/snowflake`,
+ * `@vericto/sdk/better-sqlite3`, `@vericto/sdk/ai` (Vercel AI SDK),
+ * `@vericto/sdk/openai-agents` (OpenAI Agents SDK), `@vericto/sdk/mastra` (Mastra) and
  * `@vericto/sdk/langchain` (LangChain.js).
  */
 export { KNOWN_DIALECTS, normalizeDialect } from './dialects.js';
