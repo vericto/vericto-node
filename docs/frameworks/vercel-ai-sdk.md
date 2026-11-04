@@ -141,6 +141,38 @@ takes `execute` and `description`.
 `isVerictoRefusal(output)` tells a refusal from a result; `verictoErrorOf(error)` finds a
 Vericto error behind a wrapped one.
 
+## Offline (no account)
+
+To try the guardrails before you create an API key, use [offline
+mode](../../README.md#offline-mode-no-account): a local `vericto serve` process
+(Vericto CLI 2.1.0 or later, installed separately, e.g. `npm install --save-dev
+@vericto/vericto-cli@^2.1.0`) checks each query with the engine's standard rules, with
+no network. Pass `vericto: new Vericto({ offline: true })`, or set `VERICTO_OFFLINE=1` (with no `VERICTO_API_KEY`) and every tool built without `vericto` uses it. The contract above holds as it is: a block is a refusal for the
+model, and a failure of the local process applies the fail mode. Offline there are no
+masks, allowlists, business policies or audit trail, so `approved_query` is never set and
+`event_id` is `null`.
+
+<!-- docs-check: env VERICTO_API_KEY= VERICTO_DATABASE_ID= VERICTO_CLI={serve} -->
+```ts
+import Database from 'better-sqlite3';
+import { Vericto } from '@vericto/sdk';
+import { sqlTool } from '@vericto/sdk/ai';
+
+const db = new Database(':memory:');
+db.exec('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT)');
+
+const vericto = new Vericto({ offline: true });
+const runSql = sqlTool({ dialect: 'sqlite', vericto, execute: (sql) => db.prepare(sql).all() });
+const out = await runSql.execute({ sql: 'DELETE FROM users' }, { toolCallId: 'call-1', messages: [], context: {} });
+console.log(JSON.stringify(out).includes('"rule_code":"VERICTO-001"'));
+await vericto.close();
+```
+
+<!-- docs-check: output -->
+```text
+true
+```
+
 ## Notes
 
 - `streamText` calls the same `execute`: use `throwOnVerictoError({ steps: await
@@ -153,4 +185,4 @@ Vericto error behind a wrapped one.
   not answer it with a refusal or run the approved query instead. The guard sits in the
   tool, where the SQL runs.
 - Each query the model writes is one Runtime API evaluation (`cacheTtlMs` reuses a
-  verdict for an unchanged query).
+  verdict for an unchanged query), or offline one round trip to the local process.

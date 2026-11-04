@@ -157,3 +157,16 @@ await appDataSource.destroy();
 []
 Vericto: UNEVALUATED. Vericto could not evaluate the query
 ```
+
+## Offline (no account)
+
+To try the guardrails before you create an API key, use [offline
+mode](../../README.md#offline-mode-no-account): a local `vericto serve` process
+(Vericto CLI 2.1.0 or later, installed separately, e.g. `npm install --save-dev
+@vericto/vericto-cli@^2.1.0`) checks each query with the engine's standard rules, with
+no network. Pass `vericto: new Vericto({ offline: true })` to
+`VerictoSqlDatabase.fromDataSourceParams`, `guardDataSource` or the tools, or set
+`VERICTO_OFFLINE=1` (with no `VERICTO_API_KEY`) and everything built without `vericto`
+uses it. Blocks still come back to the model as a message, and a failure of the local
+process applies the fail mode. Offline there are no masks, allowlists, business
+policies or audit trail: `context` and `endUser` are accepted and have no effect.

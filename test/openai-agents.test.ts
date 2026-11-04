@@ -31,6 +31,7 @@ import {
   type SqlToolResult,
   type VerictoRefusal,
 } from '../src/openai-agents.js';
+import { withOfflineGuard } from './fake-serve.js';
 import { FakeVericto, blocked, flagged, masked } from './fake-vericto.js';
 
 let fake: FakeVericto;
@@ -319,4 +320,21 @@ describe('verictoToolInputGuardrail', () => {
     expect(out).toMatchObject({ behavior: { type: 'allow' }, outputInfo: { decision: 'FLAGGED', rule_code: 'VERICTO-030' } });
     expect(fake.requests[0]?.context).toEqual({ ticket: 'CHG-9' });
   });
+});
+
+describe('offline (a local vericto serve)', () => {
+  it('sqlTool works unchanged with an offline client in a real run; the DELETE never runs', async () => {
+    await withOfflineGuard(async (vericto) => {
+      const model = new ScriptedModel([
+        { name: 'run_sql', args: { sql: 'SELECT id FROM users ORDER BY id' } },
+        { name: 'run_sql', args: { sql: 'DELETE FROM users' } },
+      ]);
+      const agent = new Agent({ name: 'sql', model, tools: [sqlTool({ dialect: 'sqlite', vericto, execute: rows })] });
+      const result = await run(agent, 'Clean up the users table');
+      const [first, second] = outputs(result.newItems);
+      expect(first).toMatchObject({ result: [{ id: 1 }, { id: 2 }], vericto: { decision: 'ALLOWED' } });
+      expect(second).toMatchObject({ decision: 'BLOCKED', executed: false, rule_code: 'VERICTO-001' });
+      expect(count()).toBe(2);
+    });
+  }, 30_000);
 });

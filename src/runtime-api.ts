@@ -80,7 +80,8 @@ export class RuntimeApiEvaluator implements Evaluator {
     const key = (options.apiKey ?? readEnv(env, 'VERICTO_API_KEY') ?? '').trim();
     if (!key) {
       throw new VerictoConfigError(
-        'No Vericto API key: pass apiKey or set VERICTO_API_KEY (a vtro_... key with the proxy:evaluate scope).',
+        'No Vericto API key: pass apiKey or set VERICTO_API_KEY (a vtro_... key with the proxy:evaluate scope). ' +
+          'To check SQL locally with the standard rules and no account, use offline: true (or VERICTO_OFFLINE=1).',
       );
     }
     if (!key.startsWith('vtro_')) {

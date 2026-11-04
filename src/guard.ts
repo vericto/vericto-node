@@ -10,6 +10,7 @@ import {
   VerictoUnsupportedDialectError,
 } from './errors.js';
 import type { Evaluator } from './evaluator.js';
+import { OfflineEvaluator, type OfflineProfile } from './offline.js';
 import { policyFields, type EvaluationOptions, type PolicyFields } from './policy-context.js';
 import { RuntimeApiEvaluator, type RuntimeApiOptions } from './runtime-api.js';
 import { isMasked, sqlToExecute, unevaluatedVerdict, type Verdict } from './verdict.js';
@@ -21,11 +22,32 @@ export interface VerictoLogger {
   info(message: string): void;
   warn(message: string): void;
   error(message: string): void;
+  /** Offline mode: the `vericto serve` process's stderr and lifecycle. Optional. */
+  debug?(message: string): void;
 }
 
 export interface VerictoOptions extends RuntimeApiOptions {
   /** What evaluates statements. Default: a `RuntimeApiEvaluator` from the options above. */
   evaluator?: Evaluator;
+  /**
+   * Check SQL with a local `vericto serve --stdio` process (Vericto CLI 2.1.0 or
+   * later, installed separately) and the engine's standard rules: no account, no
+   * network. Default: `VERICTO_OFFLINE` (`1`/`true`), else `false`. Never turned on
+   * automatically. Combined with an API key or an `evaluator` it is a
+   * `VerictoConfigError`: choose one.
+   */
+  offline?: boolean;
+  /**
+   * Offline only. `runtime` (default): the Runtime API's verdicts for a workspace
+   * with no overrides (a `DROP TABLE` is BLOCKED). `ci`: `vericto check --offline`'s
+   * (schema DDL is capped at FLAGGED).
+   */
+  offlineProfile?: OfflineProfile;
+  /**
+   * Offline only: the `vericto` binary. Default: `VERICTO_CLI`, then the
+   * `@vericto/vericto-cli` package in your `node_modules`, then `vericto` on PATH.
+   */
+  offlineCliPath?: string;
   /**
    * `closed` (default, or `VERICTO_FAIL_MODE`): when Vericto cannot answer, reject with
    * `VerictoUnavailableError` (from `check`, `enforce` and every wrapper) and do not run
@@ -45,20 +67,30 @@ export interface VerictoOptions extends RuntimeApiOptions {
 }
 
 const DEFAULT_LOGGER: VerictoLogger = {
+  debug: () => {},
   info: () => {},
   warn: (m) => { console.warn(m); },
   error: (m) => { console.error(m); },
 };
-const SILENT: VerictoLogger = { info: () => {}, warn: () => {}, error: () => {} };
+const SILENT: VerictoLogger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
+const TRUE = new Set(['1', 'true', 'yes', 'on']);
+const FALSE = new Set(['0', 'false', 'no', 'off']);
 
 /**
  * Checks SQL with Vericto before it runs. Share one instance per process; the
  * wrappers call `enforce` for every statement, and you can call it yourself around
  * any other driver.
  *
- * Every check is a network call, so every method that checks SQL is asynchronous;
- * there is no synchronous variant. The constructor throws `VerictoConfigError` for a
- * missing or malformed key, database id, URL, timeout or fail mode.
+ * Every check is a network call (or, offline, a round trip to a local process), so
+ * every method that checks SQL is asynchronous; there is no synchronous variant. The
+ * constructor throws `VerictoConfigError` for a missing or malformed key, database
+ * id, URL, timeout or fail mode, and for offline mode combined with a key or an
+ * evaluator.
+ *
+ * Offline (`{ offline: true }` or `VERICTO_OFFLINE=1`), the client starts one
+ * `vericto serve --stdio` child process on its first check. The child does not keep
+ * the event loop alive while idle, and is stopped when the process exits; call
+ * `close()` (or `await using`) to stop it earlier.
  */
 export class Vericto {
   /** What evaluates statements (a {@link RuntimeApiEvaluator} unless `options.evaluator`). */
@@ -70,10 +102,39 @@ export class Vericto {
   readonly #logger: VerictoLogger;
   readonly #cache: VerdictCache | undefined;
 
+  /** True when statements are checked by the local `vericto serve` process. */
+  readonly offline: boolean;
+
   constructor(options: VerictoOptions = {}) {
-    this.evaluator = options.evaluator ?? new RuntimeApiEvaluator(options);
+    const env = defaultEnv(options.env);
+    this.#logger = options.logger === false ? SILENT : (options.logger ?? DEFAULT_LOGGER);
+    this.offline = offlineFlag(options.offline, env);
+    if (this.offline) {
+      const key = options.apiKey?.trim() ? 'apiKey' : readEnv(env, 'VERICTO_API_KEY') ? 'VERICTO_API_KEY' : undefined;
+      const other = options.evaluator ? 'an evaluator' : key ? `an API key (${key})` : undefined;
+      if (other) {
+        throw new VerictoConfigError(
+          `Offline mode and ${other} were both given: choose one. Offline checks use the engine's standard rules ` +
+            'locally; the API key uses your workspace.',
+          { code: 'OFFLINE_CONFLICT' },
+        );
+      }
+      const logger = this.#logger;
+      this.evaluator = new OfflineEvaluator({
+        profile: options.offlineProfile,
+        cliPath: options.offlineCliPath,
+        timeoutMs: options.timeoutMs,
+        env,
+        logger: { debug: (m) => logger.debug?.(m), info: (m) => { logger.info(m); } },
+      });
+    } else {
+      if (options.offlineProfile !== undefined || options.offlineCliPath !== undefined) {
+        throw new VerictoConfigError('offlineProfile and offlineCliPath need offline: true (or VERICTO_OFFLINE=1).');
+      }
+      this.evaluator = options.evaluator ?? new RuntimeApiEvaluator(options);
+    }
     // An empty or whitespace-only VERICTO_FAIL_MODE is unset: the default, closed.
-    const fromEnv = readEnv(defaultEnv(options.env), 'VERICTO_FAIL_MODE');
+    const fromEnv = readEnv(env, 'VERICTO_FAIL_MODE');
     const source = options.failMode === undefined && fromEnv !== undefined ? 'VERICTO_FAIL_MODE' : 'failMode';
     const mode = (options.failMode ?? fromEnv ?? 'closed').trim().toLowerCase();
     if (mode !== 'closed' && mode !== 'open') {
@@ -85,7 +146,20 @@ export class Vericto {
     if (ttl < 0 || size < 1) throw new VerictoConfigError('cacheTtlMs must be >= 0 and cacheSize >= 1.');
     this.#cache = ttl > 0 ? new VerdictCache(ttl, size) : undefined;
     this.onVerdict = options.onVerdict;
-    this.#logger = options.logger === false ? SILENT : (options.logger ?? DEFAULT_LOGGER);
+  }
+
+  /**
+   * Release what the evaluator holds: offline, stop the `vericto serve` process (the
+   * checks already sent are answered first). A no-op online. Later offline checks
+   * reject with `VerictoConfigError`.
+   */
+  async close(): Promise<void> {
+    await this.evaluator.close?.();
+  }
+
+  /** `await using vericto = new Vericto({ offline: true })` closes it at the end of the scope. */
+  async [Symbol.asyncDispose](): Promise<void> {
+    await this.close();
   }
 
   /**
@@ -125,7 +199,7 @@ export class Vericto {
     } catch (err) {
       if (!(err instanceof VerictoUnavailableError) || this.failMode === 'closed') throw err;
       this.#logger.warn(`vericto: no verdict, check answered UNEVALUATED (failMode=open): ${err.message}`);
-      return unevaluatedVerdict(sql, normalizeDialect(dialect), err.message);
+      return unevaluatedVerdict(sql, normalizeDialect(dialect), err.message, this.#mode());
     }
   }
 
@@ -149,7 +223,7 @@ export class Vericto {
         this.#logger.error(`vericto: no verdict, statement not executed (failMode=closed): ${err.message}`);
         throw err;
       }
-      verdict = unevaluatedVerdict(sql, normalizeDialect(dialect), err.message);
+      verdict = unevaluatedVerdict(sql, normalizeDialect(dialect), err.message, this.#mode());
       this.#logger.warn(`vericto: no verdict, statement executed unevaluated (failMode=open): ${err.message}`);
       emitFailOpenWarning(err.message);
       this.#notify(verdict);
@@ -185,6 +259,10 @@ export class Vericto {
     const verdict = options ? await this.evaluator.evaluate(sql, name, options) : await this.evaluator.evaluate(sql, name);
     this.#cache?.put(verdict, scope);
     return verdict;
+  }
+
+  #mode(): 'online' | 'offline' {
+    return this.evaluator instanceof OfflineEvaluator ? 'offline' : 'online';
   }
 
   /** Drop every cached verdict (only relevant with `cacheTtlMs` > 0). */
@@ -223,6 +301,17 @@ export class Vericto {
     }
     if (isMasked(verdict)) this.#logger.info(`vericto: running the masked rewrite ${extra}`);
   }
+}
+
+function offlineFlag(option: boolean | undefined, env: Record<string, string | undefined>): boolean {
+  if (option !== undefined) {
+    if (typeof option !== 'boolean') throw new VerictoConfigError(`offline must be true or false, got ${JSON.stringify(option)}.`);
+    return option;
+  }
+  const raw = readEnv(env, 'VERICTO_OFFLINE')?.toLowerCase();
+  if (raw === undefined || FALSE.has(raw)) return false;
+  if (TRUE.has(raw)) return true;
+  throw new VerictoConfigError(`VERICTO_OFFLINE must be 1/true or 0/false, got ${JSON.stringify(raw)}.`);
 }
 
 function sortKeys(attrs: Record<string, string> | undefined): [string, string][] | null {

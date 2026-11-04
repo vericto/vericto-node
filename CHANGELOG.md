@@ -6,6 +6,70 @@ All notable changes to this package are documented here. The format follows
 
 ## [Unreleased]
 
+Offline mode: check SQL with no account, no API key and no network, through the same
+`Vericto` client, wrappers and agent-framework tools. Verdicts come from a local
+`vericto serve --stdio` process (Vericto CLI 2.1.0 or later, installed separately)
+with the engine's standard rules. No new runtime dependency.
+
+### Added
+
+- **`new Vericto({ offline: true })`** or **`VERICTO_OFFLINE=1`**: opt-in only, never
+  automatic (a missing API key is still an error). Offline together with an API key
+  (`apiKey` or `VERICTO_API_KEY`) or an `evaluator` throws `VerictoConfigError`
+  (`code: 'OFFLINE_CONFLICT'`): choose one.
+- **`offlineProfile`**: `'runtime'` (default) answers as the Runtime API does for a
+  workspace with no overrides (`DROP TABLE` is BLOCKED); `'ci'` answers exactly as
+  `vericto check --offline` (schema DDL VERICTO-010..019 capped at FLAGGED).
+- **Finding the CLI**: `offlineCliPath` or `VERICTO_CLI`, then the `vericto` binary of
+  `@vericto/vericto-cli` in the app's `node_modules` (a devDependency or an optional
+  peer, found from the package's `bin` metadata), then `vericto` on `PATH`. The SDK
+  checks the hello line (protocol 1, CLI >= 2.1.0) and never downloads anything.
+  `@vericto/vericto-cli` (`>=2.1.0 <3`) is declared as an optional peer dependency:
+  npm never installs it for you. A
+  missing or too old CLI is `VerictoConfigError` with `code: 'CLI_NOT_FOUND'` or
+  `'CLI_TOO_OLD'` and the install command, whatever the fail mode.
+- **`OfflineEvaluator`** (what `offline: true` builds; also usable as `evaluator`):
+  one child process per client, started on the first check, JSON Lines over stdio,
+  responses matched by id, writes that wait for `drain`. The child does not keep the
+  event loop alive while idle and is stopped when the parent exits. If it exits
+  unexpectedly, pending checks reject with `VerictoUnavailableError` (the fail mode
+  applies, as online) and the next check starts a new one; after a second failure in
+  a row it is not restarted. A check that gets no answer within `timeoutMs` (default
+  30 s; `VERICTO_TIMEOUT` is the Runtime API's and does not apply) is unavailable and
+  the process is replaced. `start()`,
+  `ping()`, `pid` and `close()` are public. Its stderr goes to the logger at debug
+  level; SQL is never logged.
+- **`Vericto.close()`** and **`Vericto[Symbol.asyncDispose]`** (`await using`): offline,
+  stop the process once the checks already sent are answered (later checks reject
+  with `VerictoConfigError`, `code: 'CLOSED'`); online, nothing to do.
+- **`Verdict.mode`** (`'online'` or `'offline'`) and **`Verdict.engineVersion`**;
+  offline, `rulesetVersion` is `standard@engine-<version>` and `raw.result` is the
+  `vericto check --offline --format json` document for the same SQL. Offline results
+  go through the same mapping as Runtime API responses (`verdictFromResponse`).
+- **`VerictoLogger.debug`** (optional): the offline process's lifecycle and stderr.
+- Errors offline: `UNSUPPORTED_DIALECT` is `VerictoUnsupportedDialectError`;
+  `INVALID_REQUEST` is `VerictoConfigError`; a statement over the process's line limit
+  (1 MiB by default) is `VerictoConfigError` with `code: 'TOO_LARGE'` (no `status`),
+  checked before it is sent; `INTERNAL`, a crash or a malformed response is
+  `VerictoUnavailableError`.
+- Several statements in one SQL text get one verdict, the strongest finding across
+  them, as online; check each statement (e.g. `enforceAll`) for one verdict each.
+- Tests: a protocol stand-in (`scripts/serve-stub.mjs`) for the unit tests, the smoke
+  test and the docs examples; one offline test per adapter (Vercel AI SDK, OpenAI
+  Agents SDK, Mastra, LangChain.js); integration and parity tests against the real
+  CLI (`test/offline-cli.test.ts`, skipped without it); a CI `offline` job that installs
+  `@vericto/vericto-cli` 2.1.0 and runs them. The smoke test checks that no entry
+  loads `node:child_process` at import time (it is imported on first use) and that a
+  process that never calls `close()` exits and leaves no child behind.
+
+### Changed
+
+- The "No Vericto API key" error now points to `offline: true` for checks without an
+  account.
+- `VerictoUnsupportedDialectError` takes an optional message (used offline).
+- Licenses: the SDK stays Apache-2.0. The Vericto CLI and engine (AGPL-3.0-only) run
+  as a separate process; the SDK does not contain, link or download them.
+
 ## [0.5.0] - 2026-10-31
 
 First-class adapters for three agent frameworks: the Vercel AI SDK, the OpenAI Agents

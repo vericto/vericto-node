@@ -13,8 +13,10 @@ export class VerictoError extends Error {
 
 /**
  * The client is misconfigured: missing or rejected API key, bad database id, a key
- * without the `proxy:evaluate` scope, or a malformed request. Thrown whatever the
- * fail mode is: failing open on a revoked key would switch the firewall off silently.
+ * without the `proxy:evaluate` scope, or a malformed request; offline, a missing or
+ * too old Vericto CLI (`code` `CLI_NOT_FOUND`, `CLI_TOO_OLD`) or an input over the
+ * local limit (`TOO_LARGE`). Thrown whatever the fail mode is: failing open on a
+ * revoked key would switch the guardrails off silently.
  */
 export class VerictoConfigError extends VerictoError {
   readonly status: number | undefined;
@@ -30,17 +32,18 @@ export class VerictoConfigError extends VerictoError {
 /**
  * The Vericto server does not evaluate this dialect (it is missing from
  * `GET /api/v1/meta/config`, e.g. `sqlite` on a server older than vericto-engine
- * 4.1.0). No SQL was executed.
+ * 4.1.0), or, offline, the local engine does not know it. No SQL was executed.
  */
 export class VerictoUnsupportedDialectError extends VerictoConfigError {
   readonly dialect: string;
   readonly supported: readonly string[];
 
-  constructor(dialect: string, supported: readonly string[], apiUrl: string) {
+  constructor(dialect: string, supported: readonly string[], apiUrl: string, message?: string) {
     const listed = supported.length ? supported.join(', ') : 'none reported';
     super(
-      `The Vericto API at ${apiUrl} does not support the '${dialect}' dialect (supported: ${listed}). ` +
-        'No SQL was executed. Upgrade the server, or use a supported dialect.',
+      message ??
+        `The Vericto API at ${apiUrl} does not support the '${dialect}' dialect (supported: ${listed}). ` +
+          'No SQL was executed. Upgrade the server, or use a supported dialect.',
       { code: 'UNSUPPORTED_DIALECT' },
     );
     this.dialect = dialect;

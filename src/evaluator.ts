@@ -7,10 +7,10 @@ import type { Verdict } from './verdict.js';
 /**
  * Turns `(sql, dialect)` into a verdict.
  *
- * This release ships one implementation, `RuntimeApiEvaluator`, which asks the Vericto
- * Runtime API. An embedded evaluator (the engine in-process, for example as WASM or a
- * native addon with synced rules) can be added later behind the same interface
- * without touching the wrappers.
+ * Two implementations ship: `RuntimeApiEvaluator` asks the Vericto Runtime API, and
+ * `OfflineEvaluator` asks a local `vericto serve --stdio` process (the Vericto CLI,
+ * a separate program) with the engine's standard rules. The wrappers work with
+ * either, unchanged.
  *
  * Implementations resolve a verdict for every evaluated statement (`BLOCKED`
  * included: blocking is the guard's job), reject with `VerictoUnavailableError` when
@@ -26,4 +26,6 @@ export interface Evaluator {
   supportedDialects(): Promise<readonly string[] | undefined>;
   /** Shown in error messages. */
   readonly apiUrl?: string;
+  /** Release what the evaluator holds (the offline child process). Called by `Vericto.close()`. */
+  close?(): Promise<void>;
 }

@@ -141,3 +141,14 @@ an AI SDK provider model); nothing else changes.
 `guardSqlTool` returns a copy (same class, id, description and schemas); the original
 tool is not changed. If your tool declares an `outputSchema`, widen it to accept the
 refusal. Each query the model writes is one Runtime API evaluation.
+
+## Offline (no account)
+
+To try the guardrails before you create an API key, use [offline
+mode](../../README.md#offline-mode-no-account): a local `vericto serve` process
+(Vericto CLI 2.1.0 or later, installed separately, e.g. `npm install --save-dev
+@vericto/vericto-cli@^2.1.0`) checks each query with the engine's standard rules, with
+no network. Pass `vericto: new Vericto({ offline: true })` to `sqlTool` or `guardSqlTool`, or set `VERICTO_OFFLINE=1` (with no `VERICTO_API_KEY`) and every tool built without `vericto` uses it. The contract above holds as it is: a block is a refusal for the
+model, and a failure of the local process applies the fail mode. Offline there are no
+masks, allowlists, business policies or audit trail, so `approved_query` is never set and
+`event_id` is `null`.

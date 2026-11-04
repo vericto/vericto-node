@@ -24,6 +24,7 @@ import {
   dialectFromDataSource,
   guardDataSource,
 } from '../src/langchain.js';
+import { withOfflineGuard } from './fake-serve.js';
 import { API_KEY, DATABASE_ID, FakeVericto, DIALECTS_WITHOUT_SQLITE, blocked, flagged, masked } from './fake-vericto.js';
 
 /** A scripted LLM: answers in order and ignores stop sequences (the testing fakes echo them). */
@@ -474,4 +475,19 @@ describe('0.4.0: the fail-mode contract and the declared context', () => {
     );
     expect(() => guardDataSource(ds, fake.guard(), 'sqlite', { context: { other: 'x' } as never })).toThrow(/unknown key/);
   });
+});
+
+describe('offline (a local vericto serve)', () => {
+  it('VerictoSqlDatabase and VerictoCheckSqlTool work unchanged with an offline client', async () => {
+    await withOfflineGuard(async (vericto) => {
+      const db = await VerictoSqlDatabase.fromDataSourceParams({ appDataSource: ds, vericto });
+      expect(JSON.parse(await db.run('SELECT email FROM users WHERE id = 1'))).toEqual([{ email: 'ana@example.com' }]);
+      const out = await db.run('DELETE FROM users');
+      expect(out).toContain('NOT executed');
+      expect(out).toContain('Rule: VERICTO-001 (severity critical)');
+      const check = new VerictoCheckSqlTool({ vericto, dialect: 'sqlite' });
+      expect(await check.invoke('SELECT 1')).toBe('Vericto: ALLOWED. The query can run.');
+      expect(await count()).toBe(2);
+    });
+  }, 30_000);
 });

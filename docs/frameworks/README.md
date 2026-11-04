@@ -17,12 +17,19 @@ integration.
 | [node-postgres](node-postgres.md) | pattern | `pg` 8.23.1 |
 | [mysql2](mysql2.md) | pattern | `mysql2` 3.24.6 |
 
+Every guide also works in [offline mode](../../README.md#offline-mode-no-account)
+(`new Vericto({ offline: true })` or `VERICTO_OFFLINE=1`): no account, the engine's
+standard rules in a local `vericto serve` process (Vericto CLI 2.1.0 or later, installed
+separately). The official integrations' guides say what changes; for the patterns,
+pass the offline guard where they pass `vericto`.
+
 All on Node.js 25.8.0 locally and Node.js 22 in CI; the official integrations with
 `@vericto/sdk` 0.5.0, the patterns with 0.4.0 and later.
 
 Every ```` ```ts ```` block in these guides is type-checked and run by
 `scripts/check-docs-examples.mjs` against a local stand-in for the Runtime API
-(`scripts/docs-stub.mjs`): no API key, no network, no model calls. This directory's
+(`scripts/docs-stub.mjs`), and the offline examples against a stand-in for `vericto
+serve` (`scripts/serve-stub.mjs`): no API key, no network, no model calls. This directory's
 `package.json` pins the versions of the pattern guides for that check; it is not published.
 The guides of the official integrations (LangChain.js, Vercel AI SDK, OpenAI Agents
 SDK, Mastra) run with the package's own devDependencies (`npm run docs:check`); the

@@ -7,6 +7,9 @@
  */
 export type Decision = 'ALLOWED' | 'FLAGGED' | 'MONITORED' | 'PARSE_ERROR' | 'BLOCKED' | 'UNEVALUATED';
 
+/** Where a verdict came from: the Vericto API, or the local engine (offline mode). */
+export type VerdictMode = 'online' | 'offline';
+
 const SERVER_DECISIONS: ReadonlySet<string> = new Set(['ALLOWED', 'FLAGGED', 'MONITORED', 'PARSE_ERROR', 'BLOCKED']);
 
 /** A rule that matched the statement. */
@@ -58,6 +61,13 @@ export interface Verdict {
   readonly rulesetVersion?: string;
   /** True when the verdict came from the local cache (`cacheTtlMs`): it was not evaluated again. */
   readonly cached: boolean;
+  /**
+   * `online` (the Vericto API) or `offline` (a local `vericto serve` process with the
+   * engine's standard rules). Absent on verdicts built by hand.
+   */
+  readonly mode?: VerdictMode;
+  /** The engine that evaluated the statement, offline (e.g. `5.0.0`). */
+  readonly engineVersion?: string;
   /** The response body, for fields this version does not model yet. */
   readonly raw: Readonly<Record<string, unknown>>;
 }
@@ -103,11 +113,13 @@ export function verdictFromResponse(body: Record<string, unknown>, sql: string, 
     eventId: optStr(body.event_id),
     rulesetVersion: optStr(body.ruleset_version),
     cached: false,
+    mode: body.mode === 'offline' ? 'offline' : 'online',
+    engineVersion: optStr(body.engine_version),
     raw: body,
   };
 }
 
-export function unevaluatedVerdict(sql: string, dialect: string, reason: string): Verdict {
+export function unevaluatedVerdict(sql: string, dialect: string, reason: string, mode: VerdictMode = 'online'): Verdict {
   return {
     decision: 'UNEVALUATED',
     sql,
@@ -117,6 +129,7 @@ export function unevaluatedVerdict(sql: string, dialect: string, reason: string)
     sensitiveColumns: [],
     accessDenied: [],
     cached: false,
+    mode,
     raw: {},
   };
 }
