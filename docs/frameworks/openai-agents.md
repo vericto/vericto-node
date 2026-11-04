@@ -131,3 +131,14 @@ environment; nothing else changes.
 | `description`, `errorFunction` (`sqlTool`) | | What the model reads; what it gets when `execute` throws something other than a Vericto error. |
 
 Each query the model writes is one Runtime API evaluation.
+
+## Offline (no account)
+
+To try the guardrails before you create an API key, use [offline
+mode](../../README.md#offline-mode-no-account): a local `vericto serve` process
+(Vericto CLI 2.1.0 or later, installed separately, e.g. `npm install --save-dev
+@vericto/vericto-cli@^2.1.0`) checks each query with the engine's standard rules, with
+no network. Pass `vericto: new Vericto({ offline: true })` to `sqlTool` or `verictoToolInputGuardrail`, or set `VERICTO_OFFLINE=1` (with no `VERICTO_API_KEY`) and every tool and guardrail built without `vericto` uses it. The contract above holds as it is: a block is a refusal for the
+model, and a failure of the local process applies the fail mode. Offline there are no
+masks, allowlists, business policies or audit trail, so `approved_query` is never set and
+`event_id` is `null`.

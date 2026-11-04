@@ -131,6 +131,33 @@ jobs:
         working-directory: docs/frameworks
       - run: node scripts/check-docs-examples.mjs frameworks
 
+  offline:
+    # Offline mode against the real Vericto CLI, a separate program (AGPL-3.0-only)
+    # that the SDK only spawns as `vericto serve --stdio`: one cheap job, Linux and one
+    # Node version. The CLI comes from npm as an app would install it (a devDependency
+    # here, not saved); its install script downloads the release binary and checks it
+    # against the SHA-256 pinned in that package version. Offline mode then finds it
+    # in node_modules on its own, and VERICTO_CLI_REQUIRED turns a skip into a failure.
+    name: Offline mode with the Vericto CLI
+    needs: check
+    runs-on: ${{ github.event.repository.private && fromJSON(vars.CI_RUNS_ON || '["self-hosted","linux","x64","vericto-spot"]') || fromJSON(vars.CI_RUNS_ON_PUBLIC || '"ubuntu-latest"') }}
+    timeout-minutes: 10
+    env:
+      VERICTO_CLI_VERSION: "2.1.0"
+      VERICTO_CLI_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Install @vericto/vericto-cli
+        run: npm install --no-save "@vericto/vericto-cli@${VERICTO_CLI_VERSION}"
+      - run: npx vitest run test/offline-cli.test.ts
+
   pack:
     name: Package contents
     needs: check

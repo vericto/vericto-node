@@ -23,6 +23,7 @@ import {
   type VerictoRefusal,
 } from '../src/mastra.js';
 import type { VerictoError } from '../src/index.js';
+import { withOfflineGuard } from './fake-serve.js';
 import { FakeVericto, blocked, flagged, masked } from './fake-vericto.js';
 
 let fake: FakeVericto;
@@ -246,4 +247,31 @@ describe('guardSqlTool', () => {
     expect(results[0]).toMatchObject({ decision: 'BLOCKED', rule_code: 'VERICTO-010' });
     expect(execute).not.toHaveBeenCalled();
   });
+});
+
+describe('offline (a local vericto serve)', () => {
+  it('sqlTool works unchanged with an offline client: allowed runs, blocked is refused', async () => {
+    await withOfflineGuard(async (vericto) => {
+      const ran: string[] = [];
+      const t = sqlTool({
+        dialect: 'sqlite',
+        vericto,
+        execute: (sql) => {
+          ran.push(sql);
+          return rows(sql);
+        },
+      });
+      expect(await t.execute({ sql: 'SELECT id FROM users WHERE id = 2' }, CTX)).toMatchObject({
+        result: [{ id: 2 }],
+        vericto: { decision: 'ALLOWED' },
+      });
+      expect(await t.execute({ sql: 'DELETE FROM users' }, CTX)).toMatchObject({
+        decision: 'BLOCKED',
+        executed: false,
+        rule_code: 'VERICTO-001',
+      });
+      expect(ran).toEqual(['SELECT id FROM users WHERE id = 2']);
+      expect(count()).toBe(2);
+    });
+  }, 30_000);
 });

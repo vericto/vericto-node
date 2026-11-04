@@ -9,7 +9,9 @@
  * on the lines just before a block:
  *
  *   <!-- docs-check: skip <reason> -->      not run (the reason is required)
- *   <!-- docs-check: env KEY=VALUE ... -->  extra environment; {stub} is the stub's URL
+ *   <!-- docs-check: env KEY=VALUE ... -->  extra environment; {stub} is the stub's URL,
+ *                                           {serve} a `vericto` launcher for the offline-mode
+ *                                           stand-in (scripts/serve-stub.mjs; POSIX)
  *   <!-- docs-check: output -->             before the ```text block that follows the code
  *                                           (prose may come between): the expected stdout
  *
@@ -21,7 +23,7 @@
  * guides name (DATABASE_URL, MYSQL_URL; CI starts PostgreSQL and MySQL services).
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -149,6 +151,15 @@ if (typecheck.status !== 0) {
   console.log(`ok    type-check (${jobs.length} examples)`);
 }
 
+// Offline-mode examples run against a stand-in for `vericto serve --stdio`, as the
+// others run against the Runtime API stub.
+const serveLauncher = path.join(work, 'vericto-serve-stub');
+writeFileSync(
+  serveLauncher,
+  `#!/bin/sh\nexec '${process.execPath}' '${path.join(ROOT, 'scripts', 'serve-stub.mjs')}' "$@"\n`,
+);
+chmodSync(serveLauncher, 0o755);
+
 const stub = await startStub();
 try {
   for (const job of jobs) {
@@ -161,7 +172,7 @@ try {
       VERICTO_TIMEOUT: '',
       NODE_NO_WARNINGS: '1',
     };
-    for (const [k, v] of Object.entries(job.env)) env[k] = v.replaceAll('{stub}', stub.url);
+    for (const [k, v] of Object.entries(job.env)) env[k] = v.replaceAll('{stub}', stub.url).replaceAll('{serve}', serveLauncher);
     // Asynchronous: the stub answers from this process's event loop.
     const run = await runNode(path.join(work, job.name), { cwd: work, env });
     const where = `${job.rel}:${job.line}`;
