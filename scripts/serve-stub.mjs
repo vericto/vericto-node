@@ -7,10 +7,14 @@
 // before `serve`:
 //
 //   node serve-stub.mjs [--version-of X] [--protocol N] [--no-serve] [--garbage-hello]
-//                       [--max-line-bytes N] [--reverse] [--spawn-log FILE] serve --stdio
+//                       [--max-line-bytes N] [--reverse] [--spawn-log FILE]
+//                       [--request-log FILE] serve --stdio
 //
-// Verdicts by SQL text: DROP -> VERICTO-010 (BLOCKED under runtime, FLAGGED under ci),
-// DELETE -> BLOCKED VERICTO-001, SELEC (typo) -> PARSE_ERROR, anything else ALLOWED.
+// Verdicts by SQL text: DROP -> VERICTO-010, BLOCKED unless capped (FLAGGED): as CLI
+// 2.1.0 / 2.2.0 under ci, and as CLI 2.3.0+ (--version-of 2.3.0) under ci only with
+// "migration": true (a non-boolean migration is INVALID_REQUEST); TRUNCATE -> BLOCKED
+// VERICTO-011 (never capped, engine 5.1.0); DELETE -> BLOCKED VERICTO-001, SELEC
+// (typo) -> PARSE_ERROR, anything else ALLOWED. --request-log appends each request.
 // Special SQL texts drive the failure tests: CRASH, HANG, INTERNAL, MALFORMED,
 // NOSTATUS, WRONGID, NULLID, NOOK, STDERR.
 import { Buffer } from 'node:buffer';
@@ -26,6 +30,11 @@ if (args.includes('--version')) {
   process.stdout.write(`vericto ${version}\n`);
   process.exit(0);
 }
+const migrationScoped = (() => {
+  const [major, minor] = version.split('.').map(Number);
+  return major > 2 || (major === 2 && minor >= 3);
+})();
+const requestLog = flag('--request-log');
 const spawnLog = flag('--spawn-log');
 if (spawnLog) appendFileSync(spawnLog, `${process.pid}\n`);
 if (args.includes('--no-serve')) {
@@ -52,10 +61,13 @@ if (args.includes('--garbage-hello')) {
 }
 process.stderr.write('serve-stub: ready\n');
 
-function doc(sql, profile) {
+function doc(sql, profile, migration) {
   let q = { status: 'ALLOWED', action: null, rule_code: null, severity: null, ast_node_path: null, suggested_fix: null };
-  if (/^\s*DROP/i.test(sql)) {
-    q = profile === 'ci'
+  const capped = profile === 'ci' && (!migrationScoped || migration === true);
+  if (/^\s*TRUNCATE/i.test(sql)) {
+    q = { status: 'BLOCKED', action: 'block', rule_code: 'VERICTO-011', severity: 'critical', ast_node_path: 'TruncateStmt', suggested_fix: null };
+  } else if (/^\s*DROP/i.test(sql)) {
+    q = capped
       ? { status: 'FLAGGED', action: 'flag', rule_code: 'VERICTO-010', severity: 'critical', ast_node_path: 'DropStmt', suggested_fix: 'Use a versioned migration tool (Flyway, Prisma Migrate, Alembic, Rails migrations)' }
       : { status: 'BLOCKED', action: 'block', rule_code: 'VERICTO-010', severity: 'critical', ast_node_path: 'DropStmt', suggested_fix: 'Use a versioned migration tool (Flyway, Prisma Migrate, Alembic, Rails migrations)' };
   } else if (/^\s*DELETE/i.test(sql)) {
@@ -110,6 +122,7 @@ function handle(line) {
     if (typeof req.id === 'string') out({ id: req.id, ok: true });
     process.exit(0);
   }
+  if (requestLog) appendFileSync(requestLog, `${line}\n`);
   if (req.op === 'ping') return answer({ id: req.id, ok: true });
   const sql = req.sql;
   if (typeof sql !== 'string' || !sql.trim()) {
@@ -143,7 +156,10 @@ function handle(line) {
     default:
       break;
   }
-  answer({ id: req.id, ok: true, result: doc(sql, req.profile ?? 'runtime') });
+  if (migrationScoped && req.migration != null && typeof req.migration !== 'boolean') {
+    return answer({ id: req.id, ok: false, error: { code: 'INVALID_REQUEST', message: '`migration` must be a boolean' } });
+  }
+  answer({ id: req.id, ok: true, result: doc(sql, req.profile ?? 'runtime', req.migration) });
 }
 
 let buffer = '';

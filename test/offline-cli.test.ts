@@ -3,7 +3,8 @@
 
 /**
  * Offline mode against the real Vericto CLI (`vericto serve --stdio`, 2.1.0 or later),
- * and parity with `vericto check --offline --format json`.
+ * and parity with `vericto check --offline --format json`: `--sql` for the `ci`
+ * profile, and a file under `migrations/` for `ci` with `offlineMigration: true`.
  *
  * The binary is `VERICTO_CLI`, else what offline mode itself would find
  * (`@vericto/vericto-cli` in node_modules, then `vericto` on PATH). Without a CLI
@@ -11,7 +12,7 @@
  * (the CI offline job) they fail instead.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -93,6 +94,21 @@ describe.skipIf(!cli)(`offline mode against the real CLI (${cli ? `${cli.version
     return JSON.parse(r.stdout) as Record<string, unknown>;
   }
 
+  /** The same check of the SQL as a migration file (`migrations/0001_case.sql`). */
+  function checkMigrationFile(sql: string, dialect: string): Record<string, unknown> {
+    mkdirSync(join(scratch, 'migrations'), { recursive: true });
+    writeFileSync(join(scratch, 'migrations', '0001_case.sql'), sql);
+    const env: Record<string, string> = { HOME: scratch, PATH: process.env.PATH ?? '' };
+    const r = spawnSync(cli!.path, ['check', '--offline', '--format', 'json', '--dialect', dialect, 'migrations/0001_case.sql'], {
+      cwd: scratch,
+      env,
+      encoding: 'utf8',
+      timeout: 30_000,
+    });
+    expect(r.status === 0 || r.status === 1, r.stderr).toBe(true);
+    return JSON.parse(r.stdout) as Record<string, unknown>;
+  }
+
   it('says hello with protocol 1 and its versions', async () => {
     const e = new OfflineEvaluator({ cliPath: cli!.path });
     try {
@@ -124,6 +140,32 @@ describe.skipIf(!cli)(`offline mode against the real CLI (${cli ? `${cli.version
     }
   });
 
+  it(`parity, ci profile with offlineMigration: every verdict equals a migration file's (${String(CASES.length)} cases)`, async () => {
+    const vericto = new Vericto({
+      offline: true,
+      offlineProfile: 'ci',
+      offlineMigration: true,
+      offlineCliPath: cli!.path,
+      logger: false,
+      env: {},
+    });
+    try {
+      for (const [name, dialect, sql] of CASES) {
+        const expected = checkMigrationFile(sql, dialect);
+        const got = (await vericto.check(sql, dialect)).raw.result as Record<string, unknown>;
+        // The file's document names the file; what the verdict is built from is equal.
+        expect(got.summary, name).toEqual(expected.summary);
+        expect(got.exit_code, name).toBe(expected.exit_code);
+        const [g, e] = [(got.queries as Record<string, unknown>[])[0]!, (expected.queries as Record<string, unknown>[])[0]!];
+        for (const key of ['status', 'action', 'rule_code', 'severity', 'ast_node_path', 'suggested_fix']) {
+          expect([name, key, g[key]]).toEqual([name, key, e[key]]);
+        }
+      }
+    } finally {
+      await vericto.close();
+    }
+  });
+
   it('runtime profile: DROP TABLE is BLOCKED; outside schema DDL it matches ci', async () => {
     const runtime = new Vericto({ offline: true, offlineCliPath: cli!.path, logger: false, env: {} });
     const ci = new Vericto({ offline: true, offlineProfile: 'ci', offlineCliPath: cli!.path, logger: false, env: {} });
@@ -131,7 +173,9 @@ describe.skipIf(!cli)(`offline mode against the real CLI (${cli ? `${cli.version
       const drop = await runtime.check('DROP TABLE users', 'postgres');
       expect(drop).toMatchObject({ decision: 'BLOCKED', ruleCode: 'VERICTO-010', mode: 'offline' });
       await expect(runtime.enforce('DROP TABLE users', 'postgres')).rejects.toBeInstanceOf(VerictoBlockedError);
-      expect((await ci.check('DROP TABLE users', 'postgres')).decision).toBe('FLAGGED');
+      // CLI 2.3.0+: a ci check that is not a migration blocks schema DDL; 2.1.0 / 2.2.0 flag it.
+      const scoped = versionAtLeast(cli!.version, '2.3.0');
+      expect((await ci.check('DROP TABLE users', 'postgres')).decision).toBe(scoped ? 'BLOCKED' : 'FLAGGED');
       for (const [name, dialect, sql] of CASES) {
         const [r, c] = await Promise.all([runtime.check(sql, dialect), ci.check(sql, dialect)]);
         if (DDL_RULE.test(c.ruleCode ?? '') || DDL_RULE.test(r.ruleCode ?? '')) {

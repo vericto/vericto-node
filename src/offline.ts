@@ -31,8 +31,13 @@ export const CLI_PACKAGE = '@vericto/vericto-cli';
 
 /**
  * `runtime` (default): what the Runtime API answers for a workspace with no overrides
- * (a `DROP TABLE` is BLOCKED). `ci`: what `vericto check --offline` answers, with the
- * schema DDL rules (VERICTO-010 to 019) capped at FLAGGED.
+ * (a `DROP TABLE` is BLOCKED). `ci`: what `vericto check --offline` answers. Since
+ * Vericto CLI 2.3.0 the `ci` profile caps the schema DDL rules (DROP TABLE, ALTER
+ * TABLE, DROP INDEX / TRIGGER, the Snowflake and SQLite schema rules) at FLAGGED only
+ * for a migration (`migration: true`, as for a file under `migrations/`); otherwise
+ * the SQL is checked like `check --offline --sql` and a `DROP TABLE` is BLOCKED.
+ * TRUNCATE and DROP SCHEMA / DATABASE are never capped (engine 5.1.0). CLI 2.1.0 and
+ * 2.2.0 ignore the marker and cap every `ci` check.
  */
 export type OfflineProfile = 'runtime' | 'ci';
 
@@ -57,6 +62,12 @@ export interface OfflineLogger {
 export interface OfflineEvaluatorOptions {
   /** Default `runtime`; see {@link OfflineProfile}. */
   profile?: OfflineProfile;
+  /**
+   * `ci` profile only: check the SQL as a versioned migration, so schema DDL is capped
+   * at FLAGGED (sends `"migration": true`, CLI 2.3.0+). Default `false`: a `DROP TABLE`
+   * is BLOCKED. With `profile: 'runtime'` it throws `VerictoConfigError`.
+   */
+  migration?: boolean;
   /** The `vericto` binary. Default: `VERICTO_CLI`, then `@vericto/vericto-cli` in node_modules, then `vericto` on PATH. */
   cliPath?: string;
   /**
@@ -141,6 +152,8 @@ function installExitHook(): void {
 export class OfflineEvaluator implements Evaluator {
   readonly mode = 'offline';
   readonly profile: OfflineProfile;
+  /** Whether checks are sent as a versioned migration (`ci` profile only). */
+  readonly migration: boolean;
   readonly timeoutMs: number;
   readonly #cliPath: string | undefined;
   readonly #cliPathSource: string;
@@ -164,6 +177,16 @@ export class OfflineEvaluator implements Evaluator {
       throw new VerictoConfigError(`offlineProfile must be 'runtime' or 'ci', got ${JSON.stringify(profile)}.`);
     }
     this.profile = profile;
+    const migration: unknown = options.migration ?? false;
+    if (typeof migration !== 'boolean') {
+      throw new VerictoConfigError(`offlineMigration must be true or false, got ${JSON.stringify(migration)}.`);
+    }
+    if (migration && profile !== 'ci') {
+      throw new VerictoConfigError(
+        "offlineMigration: true needs offlineProfile: 'ci' (the runtime profile has no schema-migration cap).",
+      );
+    }
+    this.migration = migration;
     this.#env = defaultEnv(options.env);
     const fromEnv = readEnv(this.#env, 'VERICTO_CLI');
     const cli = options.cliPath?.trim() || undefined;
@@ -183,11 +206,11 @@ export class OfflineEvaluator implements Evaluator {
   /** A description (the profile and, once started, the CLI version). */
   toString(): string {
     const info = this.#session?.info;
-    return `OfflineEvaluator(profile=${this.profile}${info ? `, cli=${info.cliVersion}, engine=${info.engineVersion}` : ''})`;
+    return `OfflineEvaluator(profile=${this.profile}${this.migration ? ', migration' : ''}${info ? `, cli=${info.cliVersion}, engine=${info.engineVersion}` : ''})`;
   }
 
   toJSON(): Record<string, unknown> {
-    return { mode: 'offline', profile: this.profile };
+    return { mode: 'offline', profile: this.profile, ...(this.migration ? { migration: true } : {}) };
   }
 
   /** The process id of the running `vericto serve`, if one is running. */
@@ -220,8 +243,9 @@ export class OfflineEvaluator implements Evaluator {
       this.#notedPolicyFields = true;
       this.#logger.info?.('vericto: context and endUser have no effect offline (no business policies).');
     }
-    const result = await this.#request({ op: 'check', sql, dialect, profile: this.profile }, dialect);
-    return verdictFromResponse(bodyOf(result, this.profile), sql, dialect);
+    const request = { op: 'check', sql, dialect, profile: this.profile, ...(this.migration ? { migration: true } : {}) };
+    const result = await this.#request(request, dialect);
+    return verdictFromResponse(bodyOf(result, this.profile, this.migration), sql, dialect);
   }
 
   /** Round trip with the process (`ping`). */
@@ -686,7 +710,7 @@ function errorOf(value: unknown, dialect: string | undefined): Error {
  * A `POST /api/v1/proxy/query`-shaped body from a `check` result (the
  * `vericto check --offline --format json` document), so the online mapping applies.
  */
-function bodyOf(response: Record<string, unknown>, profile: OfflineProfile): Record<string, unknown> {
+function bodyOf(response: Record<string, unknown>, profile: OfflineProfile, migration: boolean): Record<string, unknown> {
   const result = response.result;
   const doc = result && typeof result === 'object' && !Array.isArray(result) ? (result as Record<string, unknown>) : undefined;
   const queries = doc && Array.isArray(doc.queries) ? (doc.queries as unknown[]) : undefined;
@@ -707,6 +731,7 @@ function bodyOf(response: Record<string, unknown>, profile: OfflineProfile): Rec
     mode: 'offline',
     engine_version: engineVersion ?? null,
     profile,
+    migration,
     // The whole document, as `vericto check --offline --format json` prints it.
     result: doc,
   };

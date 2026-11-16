@@ -7,7 +7,7 @@
  * fail modes, crash and restart, timeouts, size limits, concurrency, close and the
  * event loop.
  */
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
@@ -266,6 +266,47 @@ describe('verdicts', () => {
     const v = await vericto.enforce('DROP TABLE users', 'postgres');
     expect(v).toMatchObject({ decision: 'FLAGGED', ruleCode: 'VERICTO-010', mode: 'offline' });
     expect(v.raw.profile).toBe('ci');
+  });
+
+  it('with CLI 2.3.0 the ci profile caps schema DDL only for a migration (offlineMigration)', async () => {
+    const requests = join(serve.dir, 'requests-migration.log');
+    const flags = ['--version-of', '2.3.0', '--request-log', requests];
+    // Not a migration: checked like `vericto check --offline --sql`, DROP TABLE blocks.
+    const plain = offline(flags, { offlineProfile: 'ci' }).vericto;
+    const blocked = await plain.check('DROP TABLE users', 'postgres');
+    expect(blocked).toMatchObject({ decision: 'BLOCKED', ruleCode: 'VERICTO-010' });
+    expect(blocked.raw).toMatchObject({ profile: 'ci', migration: false });
+    // A migration: capped at FLAGGED, as for a file under migrations/.
+    const migration = offline(flags, { offlineProfile: 'ci', offlineMigration: true }).vericto;
+    const flagged = await migration.enforce('DROP TABLE users', 'postgres');
+    expect(flagged).toMatchObject({ decision: 'FLAGGED', ruleCode: 'VERICTO-010' });
+    expect(flagged.raw).toMatchObject({ profile: 'ci', migration: true });
+    // Never capped (engine 5.1.0): TRUNCATE blocks in a migration too.
+    await expect(migration.enforce('TRUNCATE users', 'postgres')).rejects.toBeInstanceOf(VerictoBlockedError);
+    // The marker is sent only when set.
+    const sent = readFileSync(requests, 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .filter((r) => r.op === 'check');
+    expect(sent.map((r) => r.migration)).toEqual([undefined, true, true]);
+  });
+
+  it('validates offlineMigration: a boolean, with the ci profile, offline only', () => {
+    expect(() => new Vericto({ offline: true, offlineMigration: true, env: {} })).toThrow(/needs offlineProfile: 'ci'/);
+    expect(() => new OfflineEvaluator({ migration: 'yes' as unknown as boolean, profile: 'ci' })).toThrow(/true or false/);
+    expect(() =>
+      new Vericto({ apiKey: 'vtro_x', databaseId: '7c9e6679-7425-40de-944b-e07fc1f90ae7', offlineMigration: true, env: {} }),
+    ).toThrow(/offlineMigration need offline: true/);
+    expect(new Vericto({ offline: true, offlineMigration: false, env: {} }).offline).toBe(true);
+    const e = new OfflineEvaluator({ profile: 'ci', migration: true });
+    expect(String(e)).toBe('OfflineEvaluator(profile=ci, migration)');
+    expect(JSON.parse(JSON.stringify(e))).toEqual({ mode: 'offline', profile: 'ci', migration: true });
+  });
+
+  it('CLI 2.1.0 / 2.2.0 cap every ci check, migration or not', async () => {
+    const { vericto } = offline(['--version-of', '2.2.0'], { offlineProfile: 'ci' });
+    expect((await vericto.check('DROP TABLE users', 'postgres')).decision).toBe('FLAGGED');
   });
 
   it('caches verdicts and calls onVerdict as online', async () => {
