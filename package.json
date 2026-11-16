@@ -1,6 +1,6 @@
 {
   "name": "@vericto/sdk",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Official Vericto SDK for Node.js: database guardrails for AI agents, check SQL before it runs. Wrappers for snowflake-sdk and better-sqlite3, SQL tools for the Vercel AI SDK, the OpenAI Agents SDK, Mastra and LangChain.js, and a client for the Vericto Runtime API.",
   "license": "Apache-2.0",
   "author": "Vericto <security@vericto.com>",

@@ -6,6 +6,8 @@ All notable changes to this package are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-15
+
 Offline mode: check SQL with no account, no API key and no network, through the same
 `Vericto` client, wrappers and agent-framework tools. Verdicts come from a local
 `vericto serve --stdio` process (Vericto CLI 2.1.0 or later, installed separately)
@@ -19,7 +21,19 @@ with the engine's standard rules. No new runtime dependency.
   (`code: 'OFFLINE_CONFLICT'`): choose one.
 - **`offlineProfile`**: `'runtime'` (default) answers as the Runtime API does for a
   workspace with no overrides (`DROP TABLE` is BLOCKED); `'ci'` answers exactly as
-  `vericto check --offline` (schema DDL VERICTO-010..019 capped at FLAGGED).
+  `vericto check --offline`. With Vericto CLI 2.3.0+ (engine 5.1.0) that means
+  schema DDL is capped at FLAGGED only for a migration: a `ci` check that is not
+  marked as one is a `--sql` check, and `DROP TABLE` is BLOCKED. CLI 2.1.0 and 2.2.0
+  cap every `ci` check. TRUNCATE (VERICTO-011) and DROP SCHEMA / DATABASE
+  (VERICTO-012) are never capped with engine 5.1.0.
+- **`offlineMigration`** (`OfflineEvaluator`'s `migration`): with `offlineProfile:
+  'ci'`, `true` checks the SQL as a versioned migration. The SDK sends
+  `"migration": true` in the `vericto serve` request (CLI 2.3.0+), so the schema DDL
+  rules (DROP TABLE, ALTER TABLE, DROP INDEX / TRIGGER, the Snowflake and SQLite
+  schema rules) are capped at FLAGGED, as for a file under `migrations/`. Default
+  `false`; the field is sent only when `true`. With the `runtime` profile, a
+  non-boolean value, or without offline mode it throws `VerictoConfigError`.
+  `verdict.raw.migration` and `toJSON()` say what was sent.
 - **Finding the CLI**: `offlineCliPath` or `VERICTO_CLI`, then the `vericto` binary of
   `@vericto/vericto-cli` in the app's `node_modules` (a devDependency or an optional
   peer, found from the package's `bin` metadata), then `vericto` on `PATH`. The SDK
@@ -54,6 +68,11 @@ with the engine's standard rules. No new runtime dependency.
   `VerictoUnavailableError`.
 - Several statements in one SQL text get one verdict, the strongest finding across
   them, as online; check each statement (e.g. `enforceAll`) for one verdict each.
+- Tests: the protocol stand-in follows CLI 2.3.0 with `--version-of 2.3.0` (DROP
+  flagged only for a `ci` migration, TRUNCATE always blocked, `--request-log`), and
+  the real-CLI suite adds a parity case per input between `offlineMigration: true`
+  and `vericto check --offline` of a file under `migrations/` (passes with CLI 2.1.0,
+  2.2.0 and 2.3.0).
 - Tests: a protocol stand-in (`scripts/serve-stub.mjs`) for the unit tests, the smoke
   test and the docs examples; one offline test per adapter (Vercel AI SDK, OpenAI
   Agents SDK, Mastra, LangChain.js); integration and parity tests against the real
@@ -409,6 +428,7 @@ the Vericto Runtime API (`POST /api/v1/proxy/query`).
   `guardDatabase()` rejects with `VerictoUnsupportedDialectError` until the server
   lists it.
 
+[0.6.0]: https://github.com/vericto/vericto-node/releases/tag/v0.6.0
 [0.5.0]: https://github.com/vericto/vericto-node/releases/tag/v0.5.0
 [0.4.1]: https://github.com/vericto/vericto-node/releases/tag/v0.4.1
 [0.4.0]: https://github.com/vericto/vericto-node/releases/tag/v0.4.0

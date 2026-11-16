@@ -39,10 +39,19 @@ export interface VerictoOptions extends RuntimeApiOptions {
   offline?: boolean;
   /**
    * Offline only. `runtime` (default): the Runtime API's verdicts for a workspace
-   * with no overrides (a `DROP TABLE` is BLOCKED). `ci`: `vericto check --offline`'s
-   * (schema DDL is capped at FLAGGED).
+   * with no overrides (a `DROP TABLE` is BLOCKED). `ci`: `vericto check --offline`'s.
+   * With Vericto CLI 2.3.0+ the `ci` profile caps schema DDL at FLAGGED only for a
+   * migration (`offlineMigration: true`); otherwise a `DROP TABLE` is BLOCKED.
    */
   offlineProfile?: OfflineProfile;
+  /**
+   * Offline, `offlineProfile: 'ci'` only: check the SQL as a versioned migration, so
+   * schema DDL (DROP TABLE, ALTER TABLE, ...) is capped at FLAGGED, as for a file under
+   * `migrations/` in `vericto check --offline` (sends `"migration": true`, CLI 2.3.0+;
+   * 2.1.0 and 2.2.0 cap every `ci` check). Default `false`. TRUNCATE and DROP SCHEMA /
+   * DATABASE block either way.
+   */
+  offlineMigration?: boolean;
   /**
    * Offline only: the `vericto` binary. Default: `VERICTO_CLI`, then the
    * `@vericto/vericto-cli` package in your `node_modules`, then `vericto` on PATH.
@@ -122,14 +131,21 @@ export class Vericto {
       const logger = this.#logger;
       this.evaluator = new OfflineEvaluator({
         profile: options.offlineProfile,
+        migration: options.offlineMigration,
         cliPath: options.offlineCliPath,
         timeoutMs: options.timeoutMs,
         env,
         logger: { debug: (m) => logger.debug?.(m), info: (m) => { logger.info(m); } },
       });
     } else {
-      if (options.offlineProfile !== undefined || options.offlineCliPath !== undefined) {
-        throw new VerictoConfigError('offlineProfile and offlineCliPath need offline: true (or VERICTO_OFFLINE=1).');
+      if (
+        options.offlineProfile !== undefined ||
+        options.offlineCliPath !== undefined ||
+        options.offlineMigration !== undefined
+      ) {
+        throw new VerictoConfigError(
+          'offlineProfile, offlineCliPath and offlineMigration need offline: true (or VERICTO_OFFLINE=1).',
+        );
       }
       this.evaluator = options.evaluator ?? new RuntimeApiEvaluator(options);
     }

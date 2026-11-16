@@ -183,8 +183,25 @@ which answers these two statements as the real CLI 2.1.0 does.)
   document `vericto check --offline --format json` prints for the same SQL.
 - **Profiles.** `offlineProfile: 'runtime'` (default) answers as the Runtime API does
   for a workspace with no overrides: `DROP TABLE` is BLOCKED. `offlineProfile: 'ci'`
-  answers exactly as `vericto check --offline`: schema DDL (VERICTO-010 to 019) is
-  capped at FLAGGED.
+  answers exactly as `vericto check --offline`.
+- **Schema DDL in `ci` checks blocks unless the SQL is a migration** (Vericto CLI
+  2.3.0, engine 5.1.0). `vericto check --offline` caps schema DDL (DROP TABLE, ALTER
+  TABLE, DROP INDEX / TRIGGER: VERICTO-010, 013, 015 to 019, and the Snowflake /
+  SQLite schema rules) at FLAGGED only for migration files (a `migrations/`,
+  `migration/` or `migrate/` directory, a Flyway `V1__name.sql` or golang-migrate
+  `1_name.up.sql` file, or a path in `.vericto.toml`'s `migration_paths`), and
+  `vericto serve` only for a `ci` request marked `"migration": true`. Pass
+  `offlineMigration: true` (with `offlineProfile: 'ci'`) when the SQL you check is a
+  versioned migration, for example in a migration runner: the SDK sends the marker
+  and `DROP TABLE` is FLAGGED. Without it a `ci` check is a `--sql` check and
+  `DROP TABLE` is BLOCKED. TRUNCATE (VERICTO-011) and DROP SCHEMA / DATABASE
+  (VERICTO-012) are never capped. CLI 2.1.0 and 2.2.0 ignore the marker and cap every
+  `ci` check; `verdict.raw.migration` says what the SDK sent.
+
+  ```ts
+  const migrations = new Vericto({ offline: true, offlineProfile: 'ci', offlineMigration: true });
+  await migrations.check('DROP TABLE legacy_users', 'postgres'); // FLAGGED, as in migrations/
+  ```
 - **Several statements in one text** get one verdict, the strongest finding across
   them, as online. To get one verdict per statement, check each statement (for
   example with `enforceAll`).
@@ -254,6 +271,7 @@ Options (`VerictoOptions`; all optional):
 | `evaluator` | Replace the Runtime API client (see [Evaluators](#evaluators)). | `RuntimeApiEvaluator` |
 | `offline` | Check with a local `vericto serve` process (see [Offline mode](#offline-mode-no-account)). Not with `apiKey` or `evaluator`. | `VERICTO_OFFLINE`, else `false` |
 | `offlineProfile` | Offline: `runtime` or `ci`. | `runtime` |
+| `offlineMigration` | Offline, `ci` profile: check the SQL as a versioned migration (schema DDL capped at FLAGGED). | `false` |
 | `offlineCliPath` | Offline: the `vericto` binary. | `VERICTO_CLI`, then `node_modules`, then `PATH` |
 | `fetch` | A `fetch` implementation (proxies, tests). | global `fetch` |
 | `env` | Where the `VERICTO_*` defaults are read from. | `process.env` |
@@ -878,7 +896,11 @@ aparte (`npm install --save-dev @vericto/vericto-cli@^2.1.0`, o `VERICTO_CLI` co
 ruta del binario). El veredicto es el mismo `Verdict` que en línea, con
 `mode: 'offline'`, y todos los wrappers y herramientas funcionan igual. El perfil
 `runtime` (por defecto) bloquea `DROP TABLE` como la Runtime API; `ci` responde igual
-que `vericto check --offline`. Nunca se activa solo, y combinado con una clave de API
+que `vericto check --offline`. Desde la CLI 2.3.0 (motor 5.1.0), `ci` limita el DDL de
+esquema a FLAGGED solo en migraciones: sin marcar, `DROP TABLE` queda BLOCKED; con
+`offlineMigration: true` el SDK envía `"migration": true` y queda FLAGGED, como en un
+archivo de `migrations/`. TRUNCATE y DROP SCHEMA / DATABASE se bloquean siempre. Las CLI
+2.1.0 y 2.2.0 ignoran la marca. Nunca se activa solo, y combinado con una clave de API
 es un `VerictoConfigError`: hay que elegir uno. No incluye reglas propias, máscaras,
 allowlists, políticas de negocio ni auditoría. El SDK es Apache-2.0; la CLI y el motor
 son AGPL-3.0-only y corren como un proceso aparte: el SDK no los incluye ni los
