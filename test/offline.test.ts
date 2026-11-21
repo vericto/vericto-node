@@ -218,7 +218,13 @@ describe('finding the binary', () => {
     try {
       const v = new Vericto({ offline: true, logger: false, env });
       open.push(v);
-      expect((await (v.evaluator as OfflineEvaluator).start()).path).toBe(native);
+      // Narrow instead of asserting: `evaluator` is typed as the Evaluator
+      // interface, and only OfflineEvaluator has start().
+      const { evaluator } = v;
+      if (!(evaluator instanceof OfflineEvaluator)) {
+        throw new Error('offline: true must build an OfflineEvaluator');
+      }
+      expect((await evaluator.start()).path).toBe(native);
     } finally {
       cwd.mockRestore();
     }
