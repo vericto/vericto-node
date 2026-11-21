@@ -642,7 +642,14 @@ const db = new Database(':memory:');
 db.exec('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT)');
 
 // Give it to generateText / streamText as `tools: { runSql }`; here it is called directly.
-const runSql = sqlTool({ dialect: 'sqlite', execute: (sql) => db.prepare(sql).all() });
+const runSql = sqlTool({
+  dialect: 'sqlite',
+  // all() throws on a statement with no result set, so DELETE and UPDATE go to run().
+  execute: (sql) => {
+    const statement = db.prepare(sql);
+    return statement.reader ? statement.all() : statement.run();
+  },
+});
 const out = await runSql.execute({ sql: 'DELETE FROM users' }, { toolCallId: 'call-1', messages: [], context: {} });
 console.log(JSON.stringify(out).includes('"suggested_fix":"DELETE FROM users WHERE <condition>"'));
 ```
