@@ -39,7 +39,14 @@ db.exec('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT)');
 db.prepare('INSERT INTO users VALUES (?, ?)').run(1, 'ada@example.com');
 
 // 1. A ready tool (reads VERICTO_* from the environment): `execute` gets the approved SQL.
-const runSql = sqlTool({ dialect: 'sqlite', execute: (sql) => db.prepare(sql).all() });
+const runSql = sqlTool({
+  dialect: 'sqlite',
+  // all() throws on a statement with no result set, so DELETE and UPDATE go to run().
+  execute: (sql) => {
+    const statement = db.prepare(sql);
+    return statement.reader ? statement.all() : statement.run();
+  },
+});
 
 // 2. Your own tool, guarded by a tool input guardrail on its `query` argument.
 const queryDb = tool({

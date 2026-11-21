@@ -33,7 +33,14 @@ db.exec('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT)');
 db.prepare('INSERT INTO users VALUES (?, ?)').run(1, 'ada@example.com');
 
 // Reads VERICTO_* from the environment. `execute` gets the SQL Vericto approved.
-const runSql = sqlTool({ dialect: 'sqlite', execute: (sql) => db.prepare(sql).all() });
+const runSql = sqlTool({
+  dialect: 'sqlite',
+  // all() throws on a statement with no result set, so DELETE and UPDATE go to run().
+  execute: (sql) => {
+    const statement = db.prepare(sql);
+    return statement.reader ? statement.all() : statement.run();
+  },
+});
 
 // A scripted model stands in for your provider's model: two tool calls, then an answer.
 const calls = ['SELECT id, email FROM users', 'DELETE FROM users'];
@@ -162,7 +169,15 @@ const db = new Database(':memory:');
 db.exec('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT)');
 
 const vericto = new Vericto({ offline: true });
-const runSql = sqlTool({ dialect: 'sqlite', vericto, execute: (sql) => db.prepare(sql).all() });
+const runSql = sqlTool({
+  dialect: 'sqlite',
+  vericto,
+  // all() throws on a statement with no result set, so DELETE and UPDATE go to run().
+  execute: (sql) => {
+    const statement = db.prepare(sql);
+    return statement.reader ? statement.all() : statement.run();
+  },
+});
 const out = await runSql.execute({ sql: 'DELETE FROM users' }, { toolCallId: 'call-1', messages: [], context: {} });
 console.log(JSON.stringify(out).includes('"rule_code":"VERICTO-001"'));
 await vericto.close();
