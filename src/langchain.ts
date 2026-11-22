@@ -285,8 +285,9 @@ export class VerictoCheckSqlTool extends Tool {
 
   name = 'vericto-check-sql';
   description =
-    'Input is one SQL query. Checks it with the Vericto SQL firewall without running it and returns the ' +
-    'verdict: ALLOWED, FLAGGED, MONITORED, or BLOCKED with the rule and a suggested fix. ' +
+    'Input is one SQL query. Checks it against your Vericto database guardrails ' +
+    'without running it and returns the verdict: ALLOWED, FLAGGED, MONITORED, or ' +
+    'BLOCKED with the rule and a suggested fix. ' +
     'Use it before running a query; if it is blocked, fix the query and check again.';
 
   readonly vericto: Vericto;
